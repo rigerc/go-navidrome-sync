@@ -1,9 +1,11 @@
 loglevel: info
 
-server:
-  port: 8080
-  host: "0.0.0.0"
-
 navidrome:
-  baseurl: "http://localhost:4533"
-  token: ""
+  baseurl: "https://music.bsgb.nl:443"
+  user: "bond"
+  password: "Rei77GER"
+  tlsskipverify: false
+
+sync:
+  musicpath: "/mnt/extra-ssd/dev/projects/go-navidrome-ratings-sync/testdata/"
+  prefer: "local"

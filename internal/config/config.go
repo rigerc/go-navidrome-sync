@@ -11,15 +11,17 @@ import (
 )
 
 type Config struct {
-	LogLevel string `koanf:"loglevel"`
-	Server   struct {
-		Port int    `koanf:"port"`
-		Host string `koanf:"host"`
-	} `koanf:"server"`
+	LogLevel  string `koanf:"loglevel"`
 	Navidrome struct {
-		BaseURL string `koanf:"baseurl"`
-		Token   string `koanf:"token"`
+		BaseURL       string `koanf:"baseurl"`
+		User          string `koanf:"user"`
+		Password      string `koanf:"password"`
+		TLSSkipVerify bool   `koanf:"tlsskipverify"`
 	} `koanf:"navidrome"`
+	Sync struct {
+		MusicPath string `koanf:"musicpath"`
+		Prefer    string `koanf:"prefer"`
+	} `koanf:"sync"`
 }
 
 const (
@@ -54,5 +56,29 @@ func Load(configPath string) (*Config, error) {
 		return nil, fmt.Errorf("failed to unmarshal config: %w", err)
 	}
 
+	if err := Validate(&cfg); err != nil {
+		return nil, err
+	}
+
 	return &cfg, nil
+}
+
+func Validate(cfg *Config) error {
+	if cfg.Navidrome.BaseURL == "" {
+		return fmt.Errorf("navidrome.baseurl is required")
+	}
+	if cfg.Navidrome.User == "" {
+		return fmt.Errorf("navidrome.user is required")
+	}
+	if cfg.Navidrome.Password == "" {
+		return fmt.Errorf("navidrome.password is required")
+	}
+	if cfg.Sync.Prefer == "" {
+		cfg.Sync.Prefer = "local"
+	}
+	prefer := cfg.Sync.Prefer
+	if prefer != "local" && prefer != "navidrome" {
+		return fmt.Errorf("sync.prefer must be \"local\" or \"navidrome\", got %q", prefer)
+	}
+	return nil
 }
