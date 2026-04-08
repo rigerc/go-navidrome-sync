@@ -17,6 +17,7 @@ var (
 	passFlag         string
 	baseURLFlag      string
 	remotePathPrefix string
+	searchInterval   string
 	tlsSkipFlag      bool
 	reportJSONFlag   string
 )
@@ -37,6 +38,10 @@ var syncCmd = &cobra.Command{
 		if err := config.Validate(&cfg); err != nil {
 			return err
 		}
+		searchIntervalDuration, err := config.ParseSearchInterval(cfg.Sync.SearchInterval)
+		if err != nil {
+			return fmt.Errorf("parse sync search interval: %w", err)
+		}
 
 		logger := log.Default()
 
@@ -50,6 +55,7 @@ var syncCmd = &cobra.Command{
 			"navidrome", cfg.Navidrome.BaseURL,
 			"prefer", cfg.Sync.Prefer,
 			"remote_path_prefix", cfg.Sync.RemotePathPrefix,
+			"search_interval", searchIntervalDuration,
 			"dry_run", dryRun,
 			"report_json", reportJSONFlag,
 		)
@@ -69,7 +75,7 @@ var syncCmd = &cobra.Command{
 			return err
 		}
 
-		runOutput, err := sync.Run(cmd.Context(), musicPath, localFiles, client, cfg.Sync.RemotePathPrefix, cfg.Sync.Prefer, dryRun, logger)
+		runOutput, err := sync.Run(cmd.Context(), musicPath, localFiles, client, cfg.Sync.RemotePathPrefix, cfg.Sync.Prefer, searchIntervalDuration, dryRun, logger)
 		if err != nil {
 			return err
 		}
@@ -107,6 +113,9 @@ func applySyncOverrides(cfg *config.Config, args []string) {
 	if remotePathPrefix != "" {
 		cfg.Sync.RemotePathPrefix = remotePathPrefix
 	}
+	if searchInterval != "" {
+		cfg.Sync.SearchInterval = searchInterval
+	}
 }
 
 func init() {
@@ -118,6 +127,7 @@ func init() {
 	syncCmd.Flags().StringVar(&passFlag, "password", "", "Navidrome password (overrides config)")
 	syncCmd.Flags().StringVar(&baseURLFlag, "baseurl", "", "Navidrome base URL (overrides config)")
 	syncCmd.Flags().StringVar(&remotePathPrefix, "remote-path-prefix", "", "strip this prefix from Navidrome song paths before matching")
+	syncCmd.Flags().StringVar(&searchInterval, "search-interval", "", "minimum delay between remote search requests, e.g. 100ms or 1s (overrides config)")
 	syncCmd.Flags().StringVar(&reportJSONFlag, "report-json", "", "write a JSON report with matched, unmatched, and ambiguous results")
 	syncCmd.Flags().BoolVar(&tlsSkipFlag, "tls-skip-verify", false, "skip TLS certificate verification (overrides config)")
 }

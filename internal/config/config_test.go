@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestLoad_DoesNotLeakPreviousValuesBetweenCalls(t *testing.T) {
@@ -81,5 +82,24 @@ func TestLoad_OptionalDefaultConfigCanBeMissing(t *testing.T) {
 	}
 	if cfg.Navidrome.Password != "secret" {
 		t.Fatalf("cfg.Navidrome.Password = %q, want %q", cfg.Navidrome.Password, "secret")
+	}
+	if cfg.Sync.SearchInterval != "100ms" {
+		t.Fatalf("cfg.Sync.SearchInterval = %q, want %q", cfg.Sync.SearchInterval, "100ms")
+	}
+}
+
+func TestParseSearchInterval(t *testing.T) {
+	got, err := ParseSearchInterval("250ms")
+	if err != nil {
+		t.Fatalf("ParseSearchInterval() error = %v", err)
+	}
+	if got != 250*time.Millisecond {
+		t.Fatalf("ParseSearchInterval() = %v, want %v", got, 250*time.Millisecond)
+	}
+}
+
+func TestParseSearchInterval_RejectsNegativeValues(t *testing.T) {
+	if _, err := ParseSearchInterval("-1ms"); err == nil {
+		t.Fatal("ParseSearchInterval() error = nil, want invalid negative duration")
 	}
 }

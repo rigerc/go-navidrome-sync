@@ -115,7 +115,6 @@ var (
 	maxMatchWorkers  = 4
 	minSuffixScore   = 3
 	progressInterval = 25
-	searchInterval   = 100 * time.Millisecond
 )
 
 type songSearcher interface {
@@ -244,10 +243,11 @@ func Run(
 	searcher songSearcher,
 	remotePathPrefix string,
 	prefer string,
+	searchInterval time.Duration,
 	dryRun bool,
 	log *log.Logger,
 ) (*RunOutput, error) {
-	report, err := matchLocalToRemote(ctx, localFiles, searcher, remotePathPrefix, log)
+	report, err := matchLocalToRemote(ctx, localFiles, searcher, remotePathPrefix, searchInterval, log)
 	if err != nil {
 		return nil, err
 	}
@@ -414,7 +414,7 @@ type matchResult struct {
 	ambiguous *unmatchedFile
 }
 
-func matchLocalToRemote(ctx context.Context, localFiles []*LocalFile, searcher songSearcher, remotePathPrefix string, log *log.Logger) (*matchReport, error) {
+func matchLocalToRemote(ctx context.Context, localFiles []*LocalFile, searcher songSearcher, remotePathPrefix string, searchInterval time.Duration, log *log.Logger) (*matchReport, error) {
 	sorted := make([]*LocalFile, len(localFiles))
 	copy(sorted, localFiles)
 

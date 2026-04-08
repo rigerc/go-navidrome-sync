@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/charmbracelet/log"
@@ -86,6 +87,29 @@ func TestSearchSongsByTitle_DecodesUserRating(t *testing.T) {
 	}
 	if results[0].MusicBrainzID != "mbid-1" {
 		t.Fatalf("results[0].MusicBrainzID = %q, want %q", results[0].MusicBrainzID, "mbid-1")
+	}
+}
+
+func TestSearchSongsByTitle_StrictlyPercentEncodesNonAlphanumericQueryBytes(t *testing.T) {
+	client := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		want := "albumCount=0&artistCount=0&c=go%2Dnavidrome%2Dratings%2Dsync&f=json&query=%C3%A4%C3%B6%C3%BC%C2%B1%C2%B0%2B%26&"
+		if got := r.URL.RawQuery; !strings.Contains(got, want) {
+			t.Fatalf("RawQuery = %q, want substring %q", got, want)
+		}
+
+		writeJSON(t, w, map[string]any{
+			"subsonic-response": map[string]any{
+				"status":  "ok",
+				"version": "1.16.1",
+				"searchResult3": map[string]any{
+					"song": []map[string]any{},
+				},
+			},
+		})
+	})
+
+	if _, err := client.SearchSongsByTitle(context.Background(), "äöü±°+&", 1); err != nil {
+		t.Fatalf("SearchSongsByTitle() error = %v", err)
 	}
 }
 

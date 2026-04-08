@@ -17,14 +17,6 @@ import (
 	"github.com/rigerc/go-navidrome-ratings-sync/internal/tag"
 )
 
-func TestMain(m *testing.M) {
-	originalSearchInterval := searchInterval
-	searchInterval = 0
-	code := m.Run()
-	searchInterval = originalSearchInterval
-	os.Exit(code)
-}
-
 func TestScanLocalFiles_SortsFiltersAndKeepsUnreadableFiles(t *testing.T) {
 	root := t.TempDir()
 
@@ -135,7 +127,7 @@ func TestMatchLocalToRemote_UsesTitleQueryAndPathMatch(t *testing.T) {
 		},
 	}
 
-	report, err := matchLocalToRemote(context.Background(), localFiles, searcher, "", testLogger())
+	report, err := matchLocalToRemote(context.Background(), localFiles, searcher, "", 0, testLogger())
 	if err != nil {
 		t.Fatalf("matchLocalToRemote() error = %v", err)
 	}
@@ -175,7 +167,7 @@ func TestMatchLocalToRemote_FallsBackToFilenameTitle(t *testing.T) {
 		},
 	}
 
-	report, err := matchLocalToRemote(context.Background(), localFiles, searcher, "", testLogger())
+	report, err := matchLocalToRemote(context.Background(), localFiles, searcher, "", 0, testLogger())
 	if err != nil {
 		t.Fatalf("matchLocalToRemote() error = %v", err)
 	}
@@ -213,7 +205,7 @@ func TestMatchLocalToRemote_DoesNotDeadlockWhenSearchesReturnImmediately(t *test
 	var report *matchReport
 	var err error
 	go func() {
-		report, err = matchLocalToRemote(context.Background(), localFiles, searcher, "", testLogger())
+		report, err = matchLocalToRemote(context.Background(), localFiles, searcher, "", 0, testLogger())
 		close(done)
 	}()
 
@@ -248,7 +240,7 @@ func TestMatchLocalToRemote_StripsRemotePathPrefix(t *testing.T) {
 		LocalFile: &tag.LocalFile{Title: "Track Title", Artist: "Track Artist", Album: "Track Album"},
 	}}
 
-	report, err := matchLocalToRemote(context.Background(), localFiles, searcher, "music", testLogger())
+	report, err := matchLocalToRemote(context.Background(), localFiles, searcher, "music", 0, testLogger())
 	if err != nil {
 		t.Fatalf("matchLocalToRemote() error = %v", err)
 	}
@@ -272,7 +264,7 @@ func TestMatchLocalToRemote_PrefersMusicBrainzIDOverPath(t *testing.T) {
 		LocalFile: &tag.LocalFile{Title: "Track Title", Artist: "Track Artist", Album: "Track Album", MusicBrainzID: "mbid-123"},
 	}}
 
-	report, err := matchLocalToRemote(context.Background(), localFiles, searcher, "", testLogger())
+	report, err := matchLocalToRemote(context.Background(), localFiles, searcher, "", 0, testLogger())
 	if err != nil {
 		t.Fatalf("matchLocalToRemote() error = %v", err)
 	}
@@ -301,7 +293,7 @@ func TestMatchLocalToRemote_ReportsUnmatchedCandidates(t *testing.T) {
 		LocalFile: &tag.LocalFile{Title: "Track Title", Artist: "Track Artist", Album: "Track Album"},
 	}}
 
-	report, err := matchLocalToRemote(context.Background(), localFiles, searcher, "library", testLogger())
+	report, err := matchLocalToRemote(context.Background(), localFiles, searcher, "library", 0, testLogger())
 	if err != nil {
 		t.Fatalf("matchLocalToRemote() error = %v", err)
 	}
@@ -343,7 +335,7 @@ func TestMatchLocalToRemote_UsesSuffixPathFallback(t *testing.T) {
 		},
 	}}
 
-	report, err := matchLocalToRemote(context.Background(), localFiles, searcher, "", testLogger())
+	report, err := matchLocalToRemote(context.Background(), localFiles, searcher, "", 0, testLogger())
 	if err != nil {
 		t.Fatalf("matchLocalToRemote() error = %v", err)
 	}
@@ -373,7 +365,7 @@ func TestMatchLocalToRemote_DoesNotUseWeakSuffixPathFallback(t *testing.T) {
 		},
 	}}
 
-	report, err := matchLocalToRemote(context.Background(), localFiles, searcher, "", testLogger())
+	report, err := matchLocalToRemote(context.Background(), localFiles, searcher, "", 0, testLogger())
 	if err != nil {
 		t.Fatalf("matchLocalToRemote() error = %v", err)
 	}
@@ -440,7 +432,7 @@ func TestMatchLocalToRemote_TriesLessSpecificQueriesWhenFirstSearchMisses(t *tes
 		LocalFile: &tag.LocalFile{Title: "Brænder", Artist: "C.K", Album: "Accelerer"},
 	}}
 
-	report, err := matchLocalToRemote(context.Background(), localFiles, searcher, "", testLogger())
+	report, err := matchLocalToRemote(context.Background(), localFiles, searcher, "", 0, testLogger())
 	if err != nil {
 		t.Fatalf("matchLocalToRemote() error = %v", err)
 	}
@@ -471,7 +463,7 @@ func TestMatchLocalToRemote_ReportsAmbiguousSuffixMatches(t *testing.T) {
 		LocalFile: &tag.LocalFile{Title: "Track Title", Artist: "Artist", Album: "Album"},
 	}}
 
-	report, err := matchLocalToRemote(context.Background(), localFiles, searcher, "", testLogger())
+	report, err := matchLocalToRemote(context.Background(), localFiles, searcher, "", 0, testLogger())
 	if err != nil {
 		t.Fatalf("matchLocalToRemote() error = %v", err)
 	}
@@ -501,7 +493,7 @@ func TestRun_IncludesAmbiguousEntriesInReport(t *testing.T) {
 		LocalFile: &tag.LocalFile{Title: "Track Title", Artist: "Artist", Album: "Album"},
 	}}
 
-	output, err := Run(context.Background(), "", localFiles, searcher, "", "local", true, testLogger())
+	output, err := Run(context.Background(), "", localFiles, searcher, "", "local", 0, true, testLogger())
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}

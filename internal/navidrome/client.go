@@ -12,6 +12,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -219,7 +220,7 @@ func (c *Client) get(ctx context.Context, endpoint string, extra url.Values) (*r
 	req, err := http.NewRequestWithContext(
 		ctx,
 		http.MethodGet,
-		c.baseURL+"/rest/"+endpoint+"?"+params.Encode(),
+		c.baseURL+"/rest/"+endpoint+"?"+encodeQueryValues(params),
 		http.NoBody,
 	)
 	if err != nil {
@@ -273,3 +274,50 @@ func (c *Client) authParams() (url.Values, error) {
 	params.Set("f", "json")
 	return params, nil
 }
+
+func encodeQueryValues(values url.Values) string {
+	if len(values) == 0 {
+		return ""
+	}
+
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+
+	parts := make([]string, 0, len(keys))
+	for _, key := range keys {
+		encodedKey := strictPercentEncode(key)
+		for _, value := range values[key] {
+			parts = append(parts, encodedKey+"="+strictPercentEncode(value))
+		}
+	}
+	return strings.Join(parts, "&")
+}
+
+func strictPercentEncode(s string) string {
+	if s == "" {
+		return ""
+	}
+
+	var b strings.Builder
+	b.Grow(len(s) * 3)
+	for _, ch := range []byte(s) {
+		switch {
+		case ch >= 'A' && ch <= 'Z':
+			b.WriteByte(ch)
+		case ch >= 'a' && ch <= 'z':
+			b.WriteByte(ch)
+		case ch >= '0' && ch <= '9':
+			b.WriteByte(ch)
+		default:
+			b.WriteByte('%')
+			b.WriteByte(upperHex[ch>>4])
+			b.WriteByte(upperHex[ch&0x0F])
+		}
+	}
+	return b.String()
+}
+
+const upperHex = "0123456789ABCDEF"

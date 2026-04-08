@@ -12,6 +12,7 @@ func TestApplySyncOverrides_AllowsFlagOnlyConfig(t *testing.T) {
 	oldPassFlag := passFlag
 	oldBaseURLFlag := baseURLFlag
 	oldRemotePathPrefix := remotePathPrefix
+	oldSearchInterval := searchInterval
 	oldTLSSkipFlag := tlsSkipFlag
 	t.Cleanup(func() {
 		preferFlag = oldPreferFlag
@@ -19,6 +20,7 @@ func TestApplySyncOverrides_AllowsFlagOnlyConfig(t *testing.T) {
 		passFlag = oldPassFlag
 		baseURLFlag = oldBaseURLFlag
 		remotePathPrefix = oldRemotePathPrefix
+		searchInterval = oldSearchInterval
 		tlsSkipFlag = oldTLSSkipFlag
 	})
 
@@ -27,6 +29,7 @@ func TestApplySyncOverrides_AllowsFlagOnlyConfig(t *testing.T) {
 	passFlag = "secret"
 	baseURLFlag = "https://navidrome.example"
 	remotePathPrefix = "/music"
+	searchInterval = "250ms"
 	tlsSkipFlag = true
 
 	cfg := &config.Config{}
@@ -40,6 +43,9 @@ func TestApplySyncOverrides_AllowsFlagOnlyConfig(t *testing.T) {
 	}
 	if cfg.Sync.Prefer != "navidrome" {
 		t.Fatalf("cfg.Sync.Prefer = %q, want %q", cfg.Sync.Prefer, "navidrome")
+	}
+	if cfg.Sync.SearchInterval != "250ms" {
+		t.Fatalf("cfg.Sync.SearchInterval = %q, want %q", cfg.Sync.SearchInterval, "250ms")
 	}
 	if cfg.Navidrome.BaseURL != "https://navidrome.example" {
 		t.Fatalf("cfg.Navidrome.BaseURL = %q, want %q", cfg.Navidrome.BaseURL, "https://navidrome.example")

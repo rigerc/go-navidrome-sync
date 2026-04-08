@@ -10,3 +10,4 @@ sync:
   musicpath: "/mnt/extra-ssd/dev/projects/go-navidrome-ratings-sync/testdata/"
   prefer: "local"
   remotepathprefix: "/share/Music"
+  searchinterval: "20ms"

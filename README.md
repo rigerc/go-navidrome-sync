@@ -49,6 +49,7 @@ sync:
   musicpath: "/path/to/music"
   prefer: "local"
   remotepathprefix: "/share/Music"
+  searchinterval: "100ms"
 ```
 
 ## Usage
@@ -71,7 +72,8 @@ Run without a config file by supplying connection flags directly:
 go run . sync /path/to/music \
   --baseurl https://your-navidrome.example.com \
   --user your-user \
-  --password your-password
+  --password your-password \
+  --search-interval 250ms
 ```
 
 Preview changes without writing ratings:
@@ -85,6 +87,8 @@ Write a JSON report with matched, unmatched, and ambiguous results:
 ```bash
 go run . sync --dry-run --report-json sync-report.json
 ```
+
+`sync.searchinterval` and `--search-interval` control the minimum delay between remote search requests. Use `0s` to disable the delay.
 
 ## Failure behavior
 
