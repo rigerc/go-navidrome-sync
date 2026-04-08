@@ -6,10 +6,10 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 
 	"github.com/charmbracelet/log"
+	"github.com/go-resty/resty/v2"
 	"github.com/rigerc/go-navidrome-ratings-sync/internal/config"
 )
 
@@ -39,16 +39,62 @@ func TestConnect_AuthenticationFailure(t *testing.T) {
 	}
 }
 
-func TestSearchSongsByTitle_DecodesUserRating(t *testing.T) {
+func TestPing_SendsExpectedAuthAndClientParams(t *testing.T) {
+	client := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if got := r.URL.Path; got != "/rest/ping" {
+			t.Fatalf("path = %q, want %q", got, "/rest/ping")
+		}
+		if got := r.URL.Query().Get("u"); got != "admin" {
+			t.Fatalf("u = %q, want %q", got, "admin")
+		}
+		if got := r.URL.Query().Get("v"); got != apiVersion {
+			t.Fatalf("v = %q, want %q", got, apiVersion)
+		}
+		if got := r.URL.Query().Get("c"); got != clientName {
+			t.Fatalf("c = %q, want %q", got, clientName)
+		}
+		if got := r.URL.Query().Get("f"); got != "json" {
+			t.Fatalf("f = %q, want %q", got, "json")
+		}
+		if got := r.URL.Query().Get("t"); got == "" {
+			t.Fatal("t was empty")
+		}
+		if got := r.URL.Query().Get("s"); got == "" {
+			t.Fatal("s was empty")
+		}
+
+		writeJSON(t, w, map[string]any{
+			"subsonic-response": map[string]any{
+				"status":  "ok",
+				"version": "1.16.1",
+			},
+		})
+	})
+
+	if err := client.Ping(context.Background()); err != nil {
+		t.Fatalf("Ping() error = %v", err)
+	}
+}
+
+func TestSearch3_SendsExpectedRequest(t *testing.T) {
 	client := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		if got := r.URL.Path; got != "/rest/search3" {
 			t.Fatalf("path = %q, want %q", got, "/rest/search3")
 		}
-		if got := r.URL.Query().Get("query"); got != "beatles" {
-			t.Fatalf("query = %q, want %q", got, "beatles")
+		if got := r.URL.Query().Get("query"); got != "äöü±°+&" {
+			t.Fatalf("query = %q, want %q", got, "äöü±°+&")
+		}
+		if got := r.URL.Query().Get("artistCount"); got != "0" {
+			t.Fatalf("artistCount = %q, want %q", got, "0")
+		}
+		if got := r.URL.Query().Get("albumCount"); got != "0" {
+			t.Fatalf("albumCount = %q, want %q", got, "0")
 		}
 		if got := r.URL.Query().Get("songCount"); got != "2" {
 			t.Fatalf("songCount = %q, want %q", got, "2")
+		}
+		if got := r.URL.Query().Get("c"); got != clientName {
+			t.Fatalf("c = %q, want %q", got, clientName)
 		}
 
 		writeJSON(t, w, map[string]any{
@@ -57,22 +103,112 @@ func TestSearchSongsByTitle_DecodesUserRating(t *testing.T) {
 				"version": "1.16.1",
 				"searchResult3": map[string]any{
 					"song": []map[string]any{
-						{
-							"id":            "song-1",
-							"path":          "artist/album/track.flac",
-							"userRating":    4,
-							"musicBrainzId": "mbid-1",
-							"artist":        "Artist",
-							"album":         "Album",
-						},
-						{
-							"id":    "folder-1",
-							"isDir": true,
-						},
+						{"id": "song-1"},
 					},
 				},
 			},
 		})
+	})
+
+	result, err := client.Search3(context.Background(), "äöü±°+&", 2)
+	if err != nil {
+		t.Fatalf("Search3() error = %v", err)
+	}
+	if got := len(result.Song); got != 1 {
+		t.Fatalf("len(result.Song) = %d, want 1", got)
+	}
+}
+
+func TestGetSongAndGetRating_DecodeUserRating(t *testing.T) {
+	client := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if got := r.URL.Path; got != "/rest/getSong" {
+			t.Fatalf("path = %q, want %q", got, "/rest/getSong")
+		}
+		if got := r.URL.Query().Get("id"); got != "song-1" {
+			t.Fatalf("id = %q, want %q", got, "song-1")
+		}
+
+		writeJSON(t, w, map[string]any{
+			"subsonic-response": map[string]any{
+				"status":  "ok",
+				"version": "1.16.1",
+				"song": map[string]any{
+					"id":         "song-1",
+					"userRating": 4,
+				},
+			},
+		})
+	})
+
+	song, err := client.GetSong(context.Background(), "song-1")
+	if err != nil {
+		t.Fatalf("GetSong() error = %v", err)
+	}
+	if song == nil || song.UserRating != 4 {
+		t.Fatalf("song.UserRating = %v, want 4", song)
+	}
+
+	rating, err := client.GetRating(context.Background(), "song-1")
+	if err != nil {
+		t.Fatalf("GetRating() error = %v", err)
+	}
+	if rating != 4 {
+		t.Fatalf("rating = %d, want 4", rating)
+	}
+}
+
+func TestSearchSongsByTitle_DecodesUserRating(t *testing.T) {
+	getSongCalls := 0
+	client := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/rest/search3":
+			if got := r.URL.Query().Get("query"); got != "beatles" {
+				t.Fatalf("query = %q, want %q", got, "beatles")
+			}
+			if got := r.URL.Query().Get("songCount"); got != "2" {
+				t.Fatalf("songCount = %q, want %q", got, "2")
+			}
+
+			writeJSON(t, w, map[string]any{
+				"subsonic-response": map[string]any{
+					"status":  "ok",
+					"version": "1.16.1",
+					"searchResult3": map[string]any{
+						"song": []map[string]any{
+							{
+								"id":            "song-1",
+								"path":          "artist/album/track.flac",
+								"musicBrainzId": "mbid-1",
+								"artist":        "Artist",
+								"album":         "Album",
+							},
+							{
+								"id":    "folder-1",
+								"isDir": true,
+							},
+						},
+					},
+				},
+			})
+		case "/rest/getSong":
+			getSongCalls++
+			if got := r.URL.Query().Get("id"); got != "song-1" {
+				t.Fatalf("id = %q, want %q", got, "song-1")
+			}
+
+			writeJSON(t, w, map[string]any{
+				"subsonic-response": map[string]any{
+					"status":  "ok",
+					"version": "1.16.1",
+					"song": map[string]any{
+						"id":         "song-1",
+						"userRating": 4,
+					},
+				},
+			})
+		default:
+			t.Fatalf("unexpected path %q", r.URL.Path)
+		}
 	})
 
 	results, err := client.SearchSongsByTitle(context.Background(), "beatles", 2)
@@ -88,28 +224,8 @@ func TestSearchSongsByTitle_DecodesUserRating(t *testing.T) {
 	if results[0].MusicBrainzID != "mbid-1" {
 		t.Fatalf("results[0].MusicBrainzID = %q, want %q", results[0].MusicBrainzID, "mbid-1")
 	}
-}
-
-func TestSearchSongsByTitle_StrictlyPercentEncodesNonAlphanumericQueryBytes(t *testing.T) {
-	client := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
-		want := "albumCount=0&artistCount=0&c=go%2Dnavidrome%2Dratings%2Dsync&f=json&query=%C3%A4%C3%B6%C3%BC%C2%B1%C2%B0%2B%26&"
-		if got := r.URL.RawQuery; !strings.Contains(got, want) {
-			t.Fatalf("RawQuery = %q, want substring %q", got, want)
-		}
-
-		writeJSON(t, w, map[string]any{
-			"subsonic-response": map[string]any{
-				"status":  "ok",
-				"version": "1.16.1",
-				"searchResult3": map[string]any{
-					"song": []map[string]any{},
-				},
-			},
-		})
-	})
-
-	if _, err := client.SearchSongsByTitle(context.Background(), "äöü±°+&", 1); err != nil {
-		t.Fatalf("SearchSongsByTitle() error = %v", err)
+	if getSongCalls != 1 {
+		t.Fatalf("getSongCalls = %d, want 1", getSongCalls)
 	}
 }
 
@@ -148,12 +264,15 @@ func newTestClient(t *testing.T, handler http.HandlerFunc) *Client {
 	t.Cleanup(server.Close)
 
 	httpClient := server.Client()
+	restyClient := resty.NewWithClient(httpClient).
+		SetBaseURL(server.URL).
+		SetHeader("Accept", "application/json")
+
 	return &Client{
-		Client:   nil,
 		baseURL:  server.URL,
 		username: "admin",
 		password: "password",
-		http:     httpClient,
+		http:     restyClient,
 		log:      log.New(io.Discard),
 	}
 }

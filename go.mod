@@ -5,13 +5,14 @@ go 1.26.1
 require (
 	github.com/bogem/id3v2 v1.2.0
 	github.com/charmbracelet/log v1.0.0
+	github.com/go-resty/resty/v2 v2.17.2
 	github.com/knadh/koanf/parsers/yaml v1.1.0
 	github.com/knadh/koanf/providers/env v1.1.0
 	github.com/knadh/koanf/providers/file v1.2.1
 	github.com/knadh/koanf/v2 v2.3.4
-	github.com/lusoris/goenvoy/mediaserver/navidrome v1.0.0
 	github.com/mewkiz/flac v1.0.13
 	github.com/spf13/cobra v1.10.2
+	github.com/supersonic-app/go-subsonic v0.0.0-20260405192806-29d84070230a
 )
 
 require (
@@ -40,6 +41,8 @@ require (
 	github.com/xo/terminfo v0.0.0-20220910002029-abceb7e1c41e // indirect
 	go.yaml.in/yaml/v3 v3.0.4 // indirect
 	golang.org/x/exp v0.0.0-20231006140011-7918f672742d // indirect
-	golang.org/x/sys v0.32.0 // indirect
-	golang.org/x/text v0.21.0 // indirect
+	golang.org/x/image v0.23.0 // indirect
+	golang.org/x/net v0.43.0 // indirect
+	golang.org/x/sys v0.35.0 // indirect
+	golang.org/x/text v0.28.0 // indirect
 )
