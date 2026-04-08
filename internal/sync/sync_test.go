@@ -1,6 +1,8 @@
 package sync
 
 import (
+	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -125,7 +127,7 @@ func TestMatchLocalToRemote_UsesTitleQueryAndPathMatch(t *testing.T) {
 		},
 	}
 
-	report, err := matchLocalToRemote(localFiles, searcher, "", testLogger())
+	report, err := matchLocalToRemote(context.Background(), localFiles, searcher, "", testLogger())
 	if err != nil {
 		t.Fatalf("matchLocalToRemote() error = %v", err)
 	}
@@ -165,7 +167,7 @@ func TestMatchLocalToRemote_FallsBackToFilenameTitle(t *testing.T) {
 		},
 	}
 
-	report, err := matchLocalToRemote(localFiles, searcher, "", testLogger())
+	report, err := matchLocalToRemote(context.Background(), localFiles, searcher, "", testLogger())
 	if err != nil {
 		t.Fatalf("matchLocalToRemote() error = %v", err)
 	}
@@ -203,7 +205,7 @@ func TestMatchLocalToRemote_DoesNotDeadlockWhenSearchesReturnImmediately(t *test
 	var report *matchReport
 	var err error
 	go func() {
-		report, err = matchLocalToRemote(localFiles, searcher, "", testLogger())
+		report, err = matchLocalToRemote(context.Background(), localFiles, searcher, "", testLogger())
 		close(done)
 	}()
 
@@ -238,7 +240,7 @@ func TestMatchLocalToRemote_StripsRemotePathPrefix(t *testing.T) {
 		LocalFile: &tag.LocalFile{Title: "Track Title", Artist: "Track Artist", Album: "Track Album"},
 	}}
 
-	report, err := matchLocalToRemote(localFiles, searcher, "music", testLogger())
+	report, err := matchLocalToRemote(context.Background(), localFiles, searcher, "music", testLogger())
 	if err != nil {
 		t.Fatalf("matchLocalToRemote() error = %v", err)
 	}
@@ -262,7 +264,7 @@ func TestMatchLocalToRemote_PrefersMusicBrainzIDOverPath(t *testing.T) {
 		LocalFile: &tag.LocalFile{Title: "Track Title", Artist: "Track Artist", Album: "Track Album", MusicBrainzID: "mbid-123"},
 	}}
 
-	report, err := matchLocalToRemote(localFiles, searcher, "", testLogger())
+	report, err := matchLocalToRemote(context.Background(), localFiles, searcher, "", testLogger())
 	if err != nil {
 		t.Fatalf("matchLocalToRemote() error = %v", err)
 	}
@@ -291,7 +293,7 @@ func TestMatchLocalToRemote_ReportsUnmatchedCandidates(t *testing.T) {
 		LocalFile: &tag.LocalFile{Title: "Track Title", Artist: "Track Artist", Album: "Track Album"},
 	}}
 
-	report, err := matchLocalToRemote(localFiles, searcher, "library", testLogger())
+	report, err := matchLocalToRemote(context.Background(), localFiles, searcher, "library", testLogger())
 	if err != nil {
 		t.Fatalf("matchLocalToRemote() error = %v", err)
 	}
@@ -329,7 +331,7 @@ func TestMatchLocalToRemote_CanonicalizesZeroPaddedTrackPrefix(t *testing.T) {
 		LocalFile: &tag.LocalFile{Title: "Track Title", Artist: "Track Artist", Album: "Track Album"},
 	}}
 
-	report, err := matchLocalToRemote(localFiles, searcher, "", testLogger())
+	report, err := matchLocalToRemote(context.Background(), localFiles, searcher, "", testLogger())
 	if err != nil {
 		t.Fatalf("matchLocalToRemote() error = %v", err)
 	}
@@ -359,7 +361,7 @@ func TestMatchLocalToRemote_CanonicalizesMissingDashAfterTrackNumber(t *testing.
 		},
 	}}
 
-	report, err := matchLocalToRemote(localFiles, searcher, "", testLogger())
+	report, err := matchLocalToRemote(context.Background(), localFiles, searcher, "", testLogger())
 	if err != nil {
 		t.Fatalf("matchLocalToRemote() error = %v", err)
 	}
@@ -385,7 +387,7 @@ func TestMatchLocalToRemote_CanonicalizesNNTitleToDoublePrefixDashTitle(t *testi
 		LocalFile: &tag.LocalFile{Title: "Kaz", Artist: "Blawan", Album: "Bohla EP"},
 	}}
 
-	report, err := matchLocalToRemote(localFiles, searcher, "", testLogger())
+	report, err := matchLocalToRemote(context.Background(), localFiles, searcher, "", testLogger())
 	if err != nil {
 		t.Fatalf("matchLocalToRemote() error = %v", err)
 	}
@@ -411,7 +413,7 @@ func TestMatchLocalToRemote_CanonicalizesNNTitleToDashTitle(t *testing.T) {
 		LocalFile: &tag.LocalFile{Title: "Peaches [Coronation]", Artist: "Blawan", Album: "Peaches"},
 	}}
 
-	report, err := matchLocalToRemote(localFiles, searcher, "", testLogger())
+	report, err := matchLocalToRemote(context.Background(), localFiles, searcher, "", testLogger())
 	if err != nil {
 		t.Fatalf("matchLocalToRemote() error = %v", err)
 	}
@@ -441,7 +443,7 @@ func TestMatchLocalToRemote_UsesSuffixPathFallback(t *testing.T) {
 		},
 	}}
 
-	report, err := matchLocalToRemote(localFiles, searcher, "", testLogger())
+	report, err := matchLocalToRemote(context.Background(), localFiles, searcher, "", testLogger())
 	if err != nil {
 		t.Fatalf("matchLocalToRemote() error = %v", err)
 	}
@@ -471,7 +473,7 @@ func TestMatchLocalToRemote_DoesNotUseWeakSuffixPathFallback(t *testing.T) {
 		},
 	}}
 
-	report, err := matchLocalToRemote(localFiles, searcher, "", testLogger())
+	report, err := matchLocalToRemote(context.Background(), localFiles, searcher, "", testLogger())
 	if err != nil {
 		t.Fatalf("matchLocalToRemote() error = %v", err)
 	}
@@ -495,6 +497,111 @@ func TestSearchQuery_UsesTrackMetadata(t *testing.T) {
 
 	if got, want := searchQuery(localFile), "Track Title Track Artist Track Album"; got != want {
 		t.Fatalf("searchQuery() = %q, want %q", got, want)
+	}
+}
+
+func TestMatchLocalToRemote_ReportsAmbiguousSuffixMatches(t *testing.T) {
+	searcher := &stubSongSearcher{
+		results: map[string][]*navidrome.RemoteSong{
+			"Track Title Artist Album": {
+				{ID: "candidate-1", Path: "folder-a/Artist/Album/01 - Track Title.mp3"},
+				{ID: "candidate-2", Path: "folder-b/Artist/Album/01 - Track Title.mp3"},
+			},
+		},
+	}
+
+	localFiles := []*LocalFile{{
+		RelPath:   "Artist/Album/01 Track Title.mp3",
+		LocalFile: &tag.LocalFile{Title: "Track Title", Artist: "Artist", Album: "Album"},
+	}}
+
+	report, err := matchLocalToRemote(context.Background(), localFiles, searcher, "", testLogger())
+	if err != nil {
+		t.Fatalf("matchLocalToRemote() error = %v", err)
+	}
+	if len(report.matches) != 0 {
+		t.Fatalf("len(report.matches) = %d, want 0", len(report.matches))
+	}
+	if len(report.ambiguous) != 1 {
+		t.Fatalf("len(report.ambiguous) = %d, want 1", len(report.ambiguous))
+	}
+	if got := report.ambiguous[0].reason; got != "multiple candidates tied for suffix path match" {
+		t.Fatalf("reason = %q, want suffix ambiguity", got)
+	}
+}
+
+func TestRun_IncludesAmbiguousEntriesInReport(t *testing.T) {
+	searcher := &stubSongSearcher{
+		results: map[string][]*navidrome.RemoteSong{
+			"Track Title Artist Album": {
+				{ID: "candidate-1", Path: "folder-a/Artist/Album/01 - Track Title.mp3"},
+				{ID: "candidate-2", Path: "folder-b/Artist/Album/01 - Track Title.mp3"},
+			},
+		},
+	}
+
+	localFiles := []*LocalFile{{
+		RelPath:   "Artist/Album/01 Track Title.mp3",
+		LocalFile: &tag.LocalFile{Title: "Track Title", Artist: "Artist", Album: "Album"},
+	}}
+
+	output, err := Run(context.Background(), "", localFiles, searcher, "", "local", true, testLogger())
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if got := output.Report.Summary.Ambiguous; got != 1 {
+		t.Fatalf("output.Report.Summary.Ambiguous = %d, want 1", got)
+	}
+	if len(output.Report.Ambiguous) != 1 {
+		t.Fatalf("len(output.Report.Ambiguous) = %d, want 1", len(output.Report.Ambiguous))
+	}
+}
+
+func TestApplyResults_ReturnsAggregateFailure(t *testing.T) {
+	results := []Result{{
+		Action:    ActionPull,
+		Path:      "track.txt",
+		NewRating: 4,
+	}}
+
+	err := ApplyResults(context.Background(), t.TempDir(), results, &navidrome.Client{}, false, testLogger())
+	if err == nil {
+		t.Fatal("ApplyResults() error = nil, want aggregate failure")
+	}
+}
+
+func TestWriteReportJSON_WritesStructuredReport(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "reports", "sync.json")
+
+	report := RunReport{
+		Summary: ReportSummary{Matched: 1, Unmatched: 1, Ambiguous: 1},
+		Matched: []MatchedEntry{{Path: "track.mp3"}},
+		Unmatched: []UnresolvedEntry{{
+			Path:   "missing.mp3",
+			Reason: "search returned no song candidates",
+		}},
+		Ambiguous: []UnresolvedEntry{{
+			Path:   "ambiguous.mp3",
+			Reason: "multiple candidates tied for suffix path match",
+		}},
+	}
+
+	if err := WriteReportJSON(path, report); err != nil {
+		t.Fatalf("WriteReportJSON() error = %v", err)
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+
+	var decoded RunReport
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("Unmarshal() error = %v", err)
+	}
+	if got := decoded.Summary.Ambiguous; got != 1 {
+		t.Fatalf("decoded.Summary.Ambiguous = %d, want 1", got)
 	}
 }
 
@@ -525,7 +632,10 @@ type stubSongSearcher struct {
 	err     error
 }
 
-func (s *stubSongSearcher) SearchSongsByTitle(title string, limit int) ([]*navidrome.RemoteSong, error) {
+func (s *stubSongSearcher) SearchSongsByTitle(ctx context.Context, title string, limit int) ([]*navidrome.RemoteSong, error) {
+	if ctx == nil {
+		return nil, fmt.Errorf("context is nil")
+	}
 	s.mu.Lock()
 	s.queries = append(s.queries, title)
 	s.limits = append(s.limits, limit)

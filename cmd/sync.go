@@ -18,6 +18,7 @@ var (
 	baseURLFlag      string
 	remotePathPrefix string
 	tlsSkipFlag      bool
+	reportJSONFlag   string
 )
 
 var syncCmd = &cobra.Command{
@@ -26,48 +27,31 @@ var syncCmd = &cobra.Command{
 	Long:  "Scan music files for ratings and bidirectionally sync them with a Navidrome server.",
 	Args:  cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		cfg := config.FromContext(cmd.Context())
+		baseCfg := config.FromContext(cmd.Context())
+		if baseCfg == nil {
+			return fmt.Errorf("config not loaded")
+		}
+
+		cfg := *baseCfg
+		applySyncOverrides(&cfg, args)
+		if err := config.Validate(&cfg); err != nil {
+			return err
+		}
+
 		logger := log.Default()
 
 		musicPath := cfg.Sync.MusicPath
-		if len(args) > 0 {
-			musicPath = args[0]
-		}
-
 		if musicPath == "" {
 			return fmt.Errorf("music path is required (provide as argument or set sync.musicpath in config)")
-		}
-
-		if baseURLFlag != "" {
-			cfg.Navidrome.BaseURL = baseURLFlag
-		}
-		if userFlag != "" {
-			cfg.Navidrome.User = userFlag
-		}
-		if passFlag != "" {
-			cfg.Navidrome.Password = passFlag
-		}
-		if tlsSkipFlag {
-			cfg.Navidrome.TLSSkipVerify = true
-		}
-		prefer := cfg.Sync.Prefer
-		if preferFlag != "" {
-			prefer = preferFlag
-		}
-		if remotePathPrefix != "" {
-			cfg.Sync.RemotePathPrefix = remotePathPrefix
-		}
-
-		if prefer != "local" && prefer != "navidrome" {
-			return cmd.Help()
 		}
 
 		logger.Debug("Starting sync",
 			"music_path", musicPath,
 			"navidrome", cfg.Navidrome.BaseURL,
-			"prefer", prefer,
+			"prefer", cfg.Sync.Prefer,
 			"remote_path_prefix", cfg.Sync.RemotePathPrefix,
 			"dry_run", dryRun,
+			"report_json", reportJSONFlag,
 		)
 
 		localFiles, err := sync.ScanLocalFiles(musicPath, logger)
@@ -80,18 +64,49 @@ var syncCmd = &cobra.Command{
 			return nil
 		}
 
-		client, err := navidrome.Connect(cfg, logger)
+		client, err := navidrome.Connect(cmd.Context(), &cfg, logger)
 		if err != nil {
 			return err
 		}
 
-		results, err := sync.Run(musicPath, localFiles, client, cfg.Sync.RemotePathPrefix, prefer, dryRun, logger)
+		runOutput, err := sync.Run(cmd.Context(), musicPath, localFiles, client, cfg.Sync.RemotePathPrefix, cfg.Sync.Prefer, dryRun, logger)
 		if err != nil {
 			return err
 		}
 
-		return sync.ApplyResults(musicPath, results, client, dryRun, logger)
+		if reportJSONFlag != "" {
+			if err := sync.WriteReportJSON(reportJSONFlag, runOutput.Report); err != nil {
+				return err
+			}
+			logger.Info("Wrote sync report", "path", reportJSONFlag)
+		}
+
+		return sync.ApplyResults(cmd.Context(), musicPath, runOutput.Results, client, dryRun, logger)
 	},
+}
+
+func applySyncOverrides(cfg *config.Config, args []string) {
+	if len(args) > 0 {
+		cfg.Sync.MusicPath = args[0]
+	}
+	if baseURLFlag != "" {
+		cfg.Navidrome.BaseURL = baseURLFlag
+	}
+	if userFlag != "" {
+		cfg.Navidrome.User = userFlag
+	}
+	if passFlag != "" {
+		cfg.Navidrome.Password = passFlag
+	}
+	if tlsSkipFlag {
+		cfg.Navidrome.TLSSkipVerify = true
+	}
+	if preferFlag != "" {
+		cfg.Sync.Prefer = preferFlag
+	}
+	if remotePathPrefix != "" {
+		cfg.Sync.RemotePathPrefix = remotePathPrefix
+	}
 }
 
 func init() {
@@ -103,5 +118,6 @@ func init() {
 	syncCmd.Flags().StringVar(&passFlag, "password", "", "Navidrome password (overrides config)")
 	syncCmd.Flags().StringVar(&baseURLFlag, "baseurl", "", "Navidrome base URL (overrides config)")
 	syncCmd.Flags().StringVar(&remotePathPrefix, "remote-path-prefix", "", "strip this prefix from Navidrome song paths before matching")
+	syncCmd.Flags().StringVar(&reportJSONFlag, "report-json", "", "write a JSON report with matched, unmatched, and ambiguous results")
 	syncCmd.Flags().BoolVar(&tlsSkipFlag, "tls-skip-verify", false, "skip TLS certificate verification (overrides config)")
 }

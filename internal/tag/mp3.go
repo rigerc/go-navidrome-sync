@@ -2,6 +2,7 @@ package tag
 
 import (
 	"fmt"
+	"math/big"
 	"strings"
 
 	"github.com/bogem/id3v2"
@@ -42,11 +43,25 @@ func WritePOPMRating(filePath string, rating int) error {
 	}
 	defer tag.Close()
 
-	popm := id3v2.PopularimeterFrame{
-		Rating: starsToPopm[rating],
+	popmID := tag.CommonID("POPM")
+	popm := id3v2.PopularimeterFrame{}
+	if f := tag.GetLastFrame(popmID); f != nil {
+		if existing, ok := f.(id3v2.PopularimeterFrame); ok {
+			popm.Email = existing.Email
+			popm.Counter = existing.Counter
+		}
+	}
+	tag.DeleteFrames(popmID)
+	if popm.Counter == nil {
+		popm.Counter = big.NewInt(0)
+	}
+	popm = id3v2.PopularimeterFrame{
+		Email:   popm.Email,
+		Rating:  starsToPopm[rating],
+		Counter: popm.Counter,
 	}
 
-	tag.AddFrame(tag.CommonID("POPM"), &popm)
+	tag.AddFrame(popmID, &popm)
 
 	if err := tag.Save(); err != nil {
 		return fmt.Errorf("failed to save %s: %w", filePath, err)

@@ -32,6 +32,8 @@ Without it, Navidrome may not return the real track path, which breaks path-base
 
 The default config file is `config.yaml`.
 
+If `config.yaml` is missing, the CLI can still run from environment variables and command-line flags.
+
 Example:
 
 ```yaml
@@ -63,8 +65,27 @@ Override the music path on the command line:
 go run . sync /path/to/music
 ```
 
+Run without a config file by supplying connection flags directly:
+
+```bash
+go run . sync /path/to/music \
+  --baseurl https://your-navidrome.example.com \
+  --user your-user \
+  --password your-password
+```
+
 Preview changes without writing ratings:
 
 ```bash
 go run . sync --dry-run
 ```
+
+Write a JSON report with matched, unmatched, and ambiguous results:
+
+```bash
+go run . sync --dry-run --report-json sync-report.json
+```
+
+## Failure behavior
+
+If any rating write to Navidrome or any local tag write fails, the command exits non-zero after logging the per-file errors. This makes the tool safer to use from cron, systemd timers, and other automation.

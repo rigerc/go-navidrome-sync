@@ -1,6 +1,8 @@
 package sync
 
 import (
+	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -50,6 +52,54 @@ type LocalFile struct {
 	*tag.LocalFile
 }
 
+type RunOutput struct {
+	Results []Result
+	Report  RunReport
+}
+
+type RunReport struct {
+	Summary   ReportSummary     `json:"summary"`
+	Matched   []MatchedEntry    `json:"matched"`
+	Unmatched []UnresolvedEntry `json:"unmatched"`
+	Ambiguous []UnresolvedEntry `json:"ambiguous"`
+}
+
+type ReportSummary struct {
+	Pushed            int  `json:"pushed"`
+	Pulled            int  `json:"pulled"`
+	Skipped           int  `json:"skipped"`
+	ConflictsResolved int  `json:"conflicts_resolved"`
+	Matched           int  `json:"matched"`
+	Unmatched         int  `json:"unmatched"`
+	Ambiguous         int  `json:"ambiguous"`
+	DryRun            bool `json:"dry_run"`
+}
+
+type MatchedEntry struct {
+	Path         string `json:"path"`
+	Query        string `json:"query"`
+	Method       string `json:"method"`
+	RemoteID     string `json:"remote_id"`
+	RemotePath   string `json:"remote_path"`
+	LocalRating  int    `json:"local_rating"`
+	RemoteRating int    `json:"remote_rating"`
+}
+
+type UnresolvedEntry struct {
+	Path           string           `json:"path"`
+	Query          string           `json:"query,omitempty"`
+	Reason         string           `json:"reason"`
+	LocalPath      string           `json:"local_path"`
+	LocalCanonical string           `json:"local_canonical"`
+	Candidates     []CandidateEntry `json:"candidates,omitempty"`
+}
+
+type CandidateEntry struct {
+	RawPath        string `json:"raw_path"`
+	NormalizedPath string `json:"normalized_path"`
+	Score          int    `json:"score,omitempty"`
+}
+
 type scanJob struct {
 	path    string
 	relPath string
@@ -69,7 +119,7 @@ var (
 )
 
 type songSearcher interface {
-	SearchSongsByTitle(title string, limit int) ([]*navidrome.RemoteSong, error)
+	SearchSongsByTitle(ctx context.Context, title string, limit int) ([]*navidrome.RemoteSong, error)
 }
 
 type unmatchedFile struct {
@@ -84,11 +134,13 @@ type unmatchedFile struct {
 type candidatePath struct {
 	raw        string
 	normalized string
+	score      int
 }
 
 type matchReport struct {
 	matches   []match
 	unmatched []unmatchedFile
+	ambiguous []unmatchedFile
 }
 
 func ScanLocalFiles(musicPath string, log *log.Logger) ([]*LocalFile, error) {
@@ -181,6 +233,7 @@ func scanWorkerCount() int {
 }
 
 func Run(
+	ctx context.Context,
 	musicPath string,
 	localFiles []*LocalFile,
 	searcher songSearcher,
@@ -188,13 +241,18 @@ func Run(
 	prefer string,
 	dryRun bool,
 	log *log.Logger,
-) ([]Result, error) {
-	report, err := matchLocalToRemote(localFiles, searcher, remotePathPrefix, log)
+) (*RunOutput, error) {
+	report, err := matchLocalToRemote(ctx, localFiles, searcher, remotePathPrefix, log)
 	if err != nil {
 		return nil, err
 	}
 
-	var results []Result
+	results := make([]Result, 0, len(report.matches))
+	runReport := RunReport{
+		Matched:   make([]MatchedEntry, 0, len(report.matches)),
+		Unmatched: make([]UnresolvedEntry, 0, len(report.unmatched)),
+		Ambiguous: make([]UnresolvedEntry, 0, len(report.ambiguous)),
+	}
 
 	pushed := 0
 	pulled := 0
@@ -204,6 +262,15 @@ func Run(
 	for _, m := range report.matches {
 		localRating := m.local.Rating
 		remoteRating := m.remote.UserRating
+		runReport.Matched = append(runReport.Matched, MatchedEntry{
+			Path:         m.local.RelPath,
+			Query:        searchQuery(m.local),
+			Method:       m.method,
+			RemoteID:     m.remote.ID,
+			RemotePath:   m.remote.Path,
+			LocalRating:  localRating,
+			RemoteRating: remoteRating,
+		})
 
 		if dryRun {
 			log.Info(formatMatchedDryRunMessage(m, localRating, remoteRating))
@@ -265,9 +332,19 @@ func Run(
 		}
 	}
 
+	for _, item := range report.unmatched {
+		runReport.Unmatched = append(runReport.Unmatched, unresolvedEntry(item))
+	}
+	for _, item := range report.ambiguous {
+		runReport.Ambiguous = append(runReport.Ambiguous, unresolvedEntry(item))
+	}
+
 	if dryRun {
 		for _, unmatched := range report.unmatched {
 			log.Info(formatUnmatchedDryRunMessage(unmatched))
+		}
+		for _, ambiguous := range report.ambiguous {
+			log.Info(formatAmbiguousDryRunMessage(ambiguous))
 		}
 	}
 
@@ -275,6 +352,7 @@ func Run(
 		"pushed", pushed, "pulled", pulled,
 		"skipped", skipped, "conflicts_resolved", conflicts,
 		"unmatched", len(report.unmatched),
+		"ambiguous", len(report.ambiguous),
 		"dry_run", dryRun,
 	)
 	if len(report.unmatched) > 0 {
@@ -288,8 +366,33 @@ func Run(
 			)
 		}
 	}
+	if len(report.ambiguous) > 0 {
+		log.Info("Ambiguous summary", "count", len(report.ambiguous))
+		for _, item := range report.ambiguous {
+			log.Info("Ambiguous song",
+				"path", item.path,
+				"reason", item.reason,
+				"query", item.query,
+				"remote_paths", formatCandidatePaths(item.candidates),
+			)
+		}
+	}
 
-	return results, nil
+	runReport.Summary = ReportSummary{
+		Pushed:            pushed,
+		Pulled:            pulled,
+		Skipped:           skipped,
+		ConflictsResolved: conflicts,
+		Matched:           len(report.matches),
+		Unmatched:         len(report.unmatched),
+		Ambiguous:         len(report.ambiguous),
+		DryRun:            dryRun,
+	}
+
+	return &RunOutput{
+		Results: results,
+		Report:  runReport,
+	}, nil
 }
 
 type match struct {
@@ -302,9 +405,10 @@ type matchResult struct {
 	index     int
 	match     *match
 	unmatched *unmatchedFile
+	ambiguous *unmatchedFile
 }
 
-func matchLocalToRemote(localFiles []*LocalFile, searcher songSearcher, remotePathPrefix string, log *log.Logger) (*matchReport, error) {
+func matchLocalToRemote(ctx context.Context, localFiles []*LocalFile, searcher songSearcher, remotePathPrefix string, log *log.Logger) (*matchReport, error) {
 	sorted := make([]*LocalFile, len(localFiles))
 	copy(sorted, localFiles)
 
@@ -373,7 +477,7 @@ func matchLocalToRemote(localFiles []*LocalFile, searcher songSearcher, remotePa
 					"search_number", searchNumber,
 					"in_flight", inFlight,
 				)
-				candidates, err := searcher.SearchSongsByTitle(query, maxSearchHits)
+				candidates, err := searcher.SearchSongsByTitle(ctx, query, maxSearchHits)
 				searchDuration := time.Since(startedAt)
 				inFlight = inFlightSearches.Add(-1)
 				if err != nil {
@@ -409,7 +513,6 @@ func matchLocalToRemote(localFiles []*LocalFile, searcher songSearcher, remotePa
 				localPath := normalizePath(lf.RelPath, "")
 				localCanonicalPath := canonicalizePath(localPath)
 				candidatePaths := make([]candidatePath, 0, len(candidates))
-				bestCandidate, method := selectCandidate(lf, candidates, localPath, localCanonicalPath, remotePathPrefix)
 				for _, candidate := range candidates {
 					normalizedRemotePath := normalizePath(candidate.Path, remotePathPrefix)
 					candidatePaths = append(candidatePaths, candidatePath{
@@ -417,18 +520,33 @@ func matchLocalToRemote(localFiles []*LocalFile, searcher songSearcher, remotePa
 						normalized: canonicalizePath(normalizedRemotePath),
 					})
 				}
+				selection := selectCandidate(lf, candidates, localPath, localCanonicalPath, remotePathPrefix)
 
-				if bestCandidate != nil {
+				if selection.match != nil {
 					results <- matchResult{
 						index: index,
-						match: &match{local: lf, remote: bestCandidate, method: method},
+						match: &match{local: lf, remote: selection.match, method: selection.method},
 					}
 					log.Debug("Matched remote song",
 						"local", lf.RelPath,
-						"remote", bestCandidate.Path,
+						"remote", selection.match.Path,
 						"query", query,
-						"method", method,
+						"method", selection.method,
 					)
+					continue
+				}
+				if selection.reason != "" {
+					results <- matchResult{
+						index: index,
+						ambiguous: &unmatchedFile{
+							path:           lf.RelPath,
+							query:          query,
+							reason:         selection.reason,
+							localPath:      localPath,
+							localCanonical: localCanonicalPath,
+							candidates:     selection.candidates,
+						},
+					}
 					continue
 				}
 
@@ -488,6 +606,7 @@ func matchLocalToRemote(localFiles []*LocalFile, searcher songSearcher, remotePa
 
 	matchesByIndex := make(map[int]*match, len(sorted))
 	unmatchedByIndex := make(map[int]*unmatchedFile, len(sorted))
+	ambiguousByIndex := make(map[int]*unmatchedFile, len(sorted))
 	processed := 0
 	for result := range results {
 		processed++
@@ -497,21 +616,30 @@ func matchLocalToRemote(localFiles []*LocalFile, searcher songSearcher, remotePa
 		if result.unmatched != nil {
 			unmatchedByIndex[result.index] = result.unmatched
 		}
+		if result.ambiguous != nil {
+			ambiguousByIndex[result.index] = result.ambiguous
+		}
 		if processed%progressInterval == 0 || processed == len(sorted) {
 			log.Info("Remote matching progress",
 				"processed", processed,
 				"total", len(sorted),
 				"matched", len(matchesByIndex),
 				"unmatched", len(unmatchedByIndex),
+				"ambiguous", len(ambiguousByIndex),
 			)
 		}
 	}
 
 	orderedMatches := make([]match, 0, len(matchesByIndex))
 	orderedUnmatched := make([]unmatchedFile, 0, len(unmatchedByIndex))
+	orderedAmbiguous := make([]unmatchedFile, 0, len(ambiguousByIndex))
 	for i := range sorted {
 		if result, ok := matchesByIndex[i]; ok {
 			orderedMatches = append(orderedMatches, *result)
+			continue
+		}
+		if result, ok := ambiguousByIndex[i]; ok {
+			orderedAmbiguous = append(orderedAmbiguous, *result)
 			continue
 		}
 		if result, ok := unmatchedByIndex[i]; ok {
@@ -519,7 +647,14 @@ func matchLocalToRemote(localFiles []*LocalFile, searcher songSearcher, remotePa
 		}
 	}
 
-	return &matchReport{matches: orderedMatches, unmatched: orderedUnmatched}, nil
+	return &matchReport{matches: orderedMatches, unmatched: orderedUnmatched, ambiguous: orderedAmbiguous}, nil
+}
+
+type selection struct {
+	match      *navidrome.RemoteSong
+	method     string
+	reason     string
+	candidates []candidatePath
 }
 
 func selectCandidate(
@@ -528,32 +663,63 @@ func selectCandidate(
 	localPath string,
 	localCanonicalPath string,
 	remotePathPrefix string,
-) (*navidrome.RemoteSong, string) {
+) selection {
 	if localFile.MusicBrainzID != "" {
+		matches := make([]*navidrome.RemoteSong, 0, 1)
 		for _, candidate := range candidates {
 			if strings.EqualFold(candidate.MusicBrainzID, localFile.MusicBrainzID) {
-				return candidate, "musicbrainz_id"
+				matches = append(matches, candidate)
 			}
 		}
+		if result, ok := selectUniqueCandidate(matches, "musicbrainz_id", "multiple candidates matched MusicBrainz ID", remotePathPrefix); ok {
+			return result
+		}
 	}
 
+	pathMatches := make([]*navidrome.RemoteSong, 0, 1)
 	for _, candidate := range candidates {
 		if normalizePath(candidate.Path, remotePathPrefix) == localPath {
-			return candidate, "path"
+			pathMatches = append(pathMatches, candidate)
 		}
 	}
+	if result, ok := selectUniqueCandidate(pathMatches, "path", "multiple candidates matched local path", remotePathPrefix); ok {
+		return result
+	}
 
+	canonicalMatches := make([]*navidrome.RemoteSong, 0, 1)
 	for _, candidate := range candidates {
 		if canonicalizePath(normalizePath(candidate.Path, remotePathPrefix)) == localCanonicalPath {
-			return candidate, "path_canonical"
+			canonicalMatches = append(canonicalMatches, candidate)
 		}
 	}
-
-	if candidate := bestSuffixPathCandidate(localFile, candidates, localCanonicalPath, remotePathPrefix); candidate != nil {
-		return candidate, "path_suffix"
+	if result, ok := selectUniqueCandidate(canonicalMatches, "path_canonical", "multiple candidates matched canonical local path", remotePathPrefix); ok {
+		return result
 	}
 
-	return nil, ""
+	if result, ok := bestSuffixPathCandidate(localFile, candidates, localCanonicalPath, remotePathPrefix); ok {
+		return result
+	}
+
+	return selection{}
+}
+
+func selectUniqueCandidate(
+	matches []*navidrome.RemoteSong,
+	method string,
+	ambiguityReason string,
+	remotePathPrefix string,
+) (selection, bool) {
+	switch len(matches) {
+	case 0:
+		return selection{}, false
+	case 1:
+		return selection{match: matches[0], method: method}, true
+	default:
+		return selection{
+			reason:     ambiguityReason,
+			candidates: candidateEntries(matches, remotePathPrefix, 0),
+		}, true
+	}
 }
 
 func searchQuery(localFile *LocalFile) string {
@@ -644,10 +810,10 @@ func bestSuffixPathCandidate(
 	candidates []*navidrome.RemoteSong,
 	localCanonicalPath string,
 	remotePathPrefix string,
-) *navidrome.RemoteSong {
+) (selection, bool) {
 	bestScore := 0
 	var bestCandidate *navidrome.RemoteSong
-	tied := false
+	tied := make([]*navidrome.RemoteSong, 0, 2)
 
 	for _, candidate := range candidates {
 		score := suffixPathScore(localFile, localCanonicalPath, canonicalizePath(normalizePath(candidate.Path, remotePathPrefix)))
@@ -657,18 +823,36 @@ func bestSuffixPathCandidate(
 		if score > bestScore {
 			bestScore = score
 			bestCandidate = candidate
-			tied = false
+			tied = []*navidrome.RemoteSong{candidate}
 			continue
 		}
 		if score == bestScore {
-			tied = true
+			tied = append(tied, candidate)
 		}
 	}
 
-	if tied {
-		return nil
+	if bestCandidate == nil {
+		return selection{}, false
 	}
-	return bestCandidate
+	if len(tied) > 1 {
+		return selection{
+			reason:     "multiple candidates tied for suffix path match",
+			candidates: candidateEntries(tied, remotePathPrefix, bestScore),
+		}, true
+	}
+	return selection{match: bestCandidate, method: "path_suffix"}, true
+}
+
+func candidateEntries(candidates []*navidrome.RemoteSong, remotePathPrefix string, score int) []candidatePath {
+	entries := make([]candidatePath, 0, len(candidates))
+	for _, candidate := range candidates {
+		entries = append(entries, candidatePath{
+			raw:        candidate.Path,
+			normalized: canonicalizePath(normalizePath(candidate.Path, remotePathPrefix)),
+			score:      score,
+		})
+	}
+	return entries
 }
 
 func suffixPathScore(localFile *LocalFile, localCanonicalPath string, remoteCanonicalPath string) int {
@@ -718,7 +902,11 @@ func matchesByPath(paths []candidatePath, target string) (string, bool) {
 func formatCandidatePaths(candidates []candidatePath) []string {
 	formatted := make([]string, 0, len(candidates))
 	for _, candidate := range candidates {
-		formatted = append(formatted, fmt.Sprintf("%s => %s", candidate.raw, candidate.normalized))
+		line := fmt.Sprintf("%s => %s", candidate.raw, candidate.normalized)
+		if candidate.score > 0 {
+			line = fmt.Sprintf("%s (score=%d)", line, candidate.score)
+		}
+		formatted = append(formatted, line)
 	}
 	return formatted
 }
@@ -767,6 +955,36 @@ func formatUnmatchedDryRunMessage(unmatched unmatchedFile) string {
 	return strings.Join(lines, "\n")
 }
 
+func formatAmbiguousDryRunMessage(ambiguous unmatchedFile) string {
+	lines := []string{
+		"[DRY-RUN] Ambiguous remote match",
+		fmt.Sprintf("  local path: %s", ambiguous.path),
+	}
+	if ambiguous.query != "" {
+		lines = append(lines, fmt.Sprintf("  query: %s", ambiguous.query))
+	}
+	lines = append(lines,
+		fmt.Sprintf("  reason: %s", ambiguous.reason),
+		fmt.Sprintf("  normalized local path: %s", ambiguous.localPath),
+		fmt.Sprintf("  canonical local path: %s", ambiguous.localCanonical),
+	)
+	if len(ambiguous.candidates) == 0 {
+		lines = append(lines, "  remote candidates: <none>")
+		return strings.Join(lines, "\n")
+	}
+
+	lines = append(lines, "  remote candidates:")
+	for _, candidate := range ambiguous.candidates {
+		line := fmt.Sprintf("    - raw: %s", candidate.raw)
+		if candidate.score > 0 {
+			line = fmt.Sprintf("%s (score=%d)", line, candidate.score)
+		}
+		lines = append(lines, line)
+		lines = append(lines, fmt.Sprintf("      normalized: %s", candidate.normalized))
+	}
+	return strings.Join(lines, "\n")
+}
+
 func songsMatch(a, b string) bool {
 	if strings.EqualFold(a, b) {
 		return true
@@ -781,12 +999,16 @@ func songsMatch(a, b string) bool {
 }
 
 func ApplyResults(
+	ctx context.Context,
 	musicPath string,
 	results []Result,
 	client *navidrome.Client,
 	dryRun bool,
 	log *log.Logger,
 ) error {
+	failures := 0
+	var firstErr error
+
 	for _, r := range results {
 		switch r.Action {
 		case ActionSkip:
@@ -797,9 +1019,13 @@ func ApplyResults(
 				log.Info("[DRY-RUN] Would push rating to Navidrome",
 					"path", r.Path, "rating", r.NewRating)
 			} else {
-				if err := client.SetRating(r.RemoteID, r.NewRating); err != nil {
+				if err := client.SetRating(ctx, r.RemoteID, r.NewRating); err != nil {
 					log.Error("Failed to push rating",
 						"path", r.Path, "rating", r.NewRating, "error", err)
+					failures++
+					if firstErr == nil {
+						firstErr = err
+					}
 					continue
 				}
 				log.Info("Pushed rating to Navidrome",
@@ -815,6 +1041,10 @@ func ApplyResults(
 				if err := tag.WriteRating(fullPath, r.NewRating); err != nil {
 					log.Error("Failed to write rating",
 						"path", r.Path, "rating", r.NewRating, "error", err)
+					failures++
+					if firstErr == nil {
+						firstErr = err
+					}
 					continue
 				}
 				log.Info("Wrote rating to local file",
@@ -823,5 +1053,49 @@ func ApplyResults(
 		}
 	}
 
+	if failures > 0 {
+		return fmt.Errorf("%d sync action(s) failed: %w", failures, firstErr)
+	}
+
 	return nil
+}
+
+func WriteReportJSON(path string, report RunReport) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil && filepath.Dir(path) != "." {
+		return fmt.Errorf("creating report directory for %s: %w", path, err)
+	}
+
+	data, err := json.MarshalIndent(report, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal sync report: %w", err)
+	}
+	data = append(data, '\n')
+
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		return fmt.Errorf("write sync report %s: %w", path, err)
+	}
+	return nil
+}
+
+func unresolvedEntry(item unmatchedFile) UnresolvedEntry {
+	entry := UnresolvedEntry{
+		Path:           item.path,
+		Query:          item.query,
+		Reason:         item.reason,
+		LocalPath:      item.localPath,
+		LocalCanonical: item.localCanonical,
+	}
+	if len(item.candidates) == 0 {
+		return entry
+	}
+
+	entry.Candidates = make([]CandidateEntry, 0, len(item.candidates))
+	for _, candidate := range item.candidates {
+		entry.Candidates = append(entry.Candidates, CandidateEntry{
+			RawPath:        candidate.raw,
+			NormalizedPath: candidate.normalized,
+			Score:          candidate.score,
+		})
+	}
+	return entry
 }

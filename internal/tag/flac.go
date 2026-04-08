@@ -121,6 +121,11 @@ type rawBlock struct {
 }
 
 func WriteFlacRating(filePath string, rating int) error {
+	info, err := os.Stat(filePath)
+	if err != nil {
+		return fmt.Errorf("failed to stat %s: %w", filePath, err)
+	}
+
 	data, err := os.ReadFile(filePath)
 	if err != nil {
 		return fmt.Errorf("failed to read %s: %w", filePath, err)
@@ -232,7 +237,16 @@ func WriteFlacRating(filePath string, rating int) error {
 
 	buf.Write(audioData)
 
-	if err := os.WriteFile(filePath, buf.Bytes(), 0644); err != nil {
+	output := buf.Bytes()
+	if vcIdx < 0 && len(blocks) > 0 {
+		lastHeaderOffset := 4
+		for i := 0; i < len(blocks)-1; i++ {
+			lastHeaderOffset += 4 + len(blocks[i].body)
+		}
+		output[lastHeaderOffset] &^= 0x80
+	}
+
+	if err := os.WriteFile(filePath, output, info.Mode()); err != nil {
 		return fmt.Errorf("failed to write %s: %w", filePath, err)
 	}
 

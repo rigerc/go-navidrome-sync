@@ -49,7 +49,7 @@ const (
 	subsonicAuthErrorCode = 40
 )
 
-func Connect(cfg *config.Config, logger *log.Logger) (*Client, error) {
+func Connect(ctx context.Context, cfg *config.Config, logger *log.Logger) (*Client, error) {
 	httpClient := &http.Client{
 		Timeout: requestTimeout,
 		Transport: &http.Transport{
@@ -67,7 +67,7 @@ func Connect(cfg *config.Config, logger *log.Logger) (*Client, error) {
 		goenvoynavidrome.WithHTTPClient(httpClient),
 	)
 
-	if err := c.Ping(context.Background()); err != nil {
+	if err := c.Ping(ctx); err != nil {
 		var subsonicErr *goenvoynavidrome.SubsonicError
 		if errors.As(err, &subsonicErr) && subsonicErr.Code == subsonicAuthErrorCode {
 			return nil, fmt.Errorf("authentication failed for user %q (check user/password)", cfg.Navidrome.User)
@@ -87,14 +87,14 @@ func Connect(cfg *config.Config, logger *log.Logger) (*Client, error) {
 	}, nil
 }
 
-func (c *Client) SearchSongsByTitle(title string, limit int) ([]*RemoteSong, error) {
+func (c *Client) SearchSongsByTitle(ctx context.Context, title string, limit int) ([]*RemoteSong, error) {
 	if limit <= 0 {
 		return nil, nil
 	}
 
 	startedAt := time.Now()
 	c.log.Debug("Navidrome search request started", "query", title, "limit", limit)
-	searchResult, err := c.search3(context.Background(), title, limit)
+	searchResult, err := c.search3(ctx, title, limit)
 	if err != nil {
 		c.log.Warn("Navidrome search request failed",
 			"query", title,
@@ -133,8 +133,8 @@ func (c *Client) SearchSongsByTitle(title string, limit int) ([]*RemoteSong, err
 	return results, nil
 }
 
-func (c *Client) SetRating(id string, rating int) error {
-	if err := c.setRating(context.Background(), id, rating); err != nil {
+func (c *Client) SetRating(ctx context.Context, id string, rating int) error {
+	if err := c.setRating(ctx, id, rating); err != nil {
 		return fmt.Errorf("setting rating for remote song %q: %w", id, err)
 	}
 	return nil

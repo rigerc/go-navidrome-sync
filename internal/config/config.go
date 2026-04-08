@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/knadh/koanf/parsers/yaml"
@@ -28,23 +29,25 @@ type Config struct {
 const (
 	DefaultConfigPath = "config.yaml"
 	prefix            = ""
+	envPrefix         = "APP_"
 )
 
-var k = koanf.New(prefix)
-
 func Load(configPath string) (*Config, error) {
+	k := koanf.New(prefix)
+
+	optionalFile := configPath == ""
 	if configPath == "" {
 		configPath = DefaultConfigPath
 	}
 
-	if err := k.Load(file.Provider(configPath), yaml.Parser()); err != nil {
+	if err := loadConfigFile(k, configPath, optionalFile); err != nil {
 		return nil, fmt.Errorf("failed to load config file %s: %w", configPath, err)
 	}
 
-	if err := k.Load(env.Provider("APP_", ".", func(s string) string {
+	if err := k.Load(env.Provider(envPrefix, ".", func(s string) string {
 		return strings.Replace(
 			strings.ToLower(
-				strings.TrimPrefix(s, "APP_"),
+				strings.TrimPrefix(s, envPrefix),
 			),
 			"_", ".", -1,
 		)
@@ -57,14 +60,28 @@ func Load(configPath string) (*Config, error) {
 		return nil, fmt.Errorf("failed to unmarshal config: %w", err)
 	}
 
-	if err := Validate(&cfg); err != nil {
-		return nil, err
-	}
-
 	return &cfg, nil
 }
 
+func loadConfigFile(k *koanf.Koanf, configPath string, optional bool) error {
+	if err := k.Load(file.Provider(configPath), yaml.Parser()); err != nil {
+		if optional && os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	return nil
+}
+
+func ApplyDefaults(cfg *Config) {
+	if cfg.Sync.Prefer == "" {
+		cfg.Sync.Prefer = "local"
+	}
+}
+
 func Validate(cfg *Config) error {
+	ApplyDefaults(cfg)
+
 	if cfg.Navidrome.BaseURL == "" {
 		return fmt.Errorf("navidrome.baseurl is required")
 	}
@@ -73,9 +90,6 @@ func Validate(cfg *Config) error {
 	}
 	if cfg.Navidrome.Password == "" {
 		return fmt.Errorf("navidrome.password is required")
-	}
-	if cfg.Sync.Prefer == "" {
-		cfg.Sync.Prefer = "local"
 	}
 	prefer := cfg.Sync.Prefer
 	if prefer != "local" && prefer != "navidrome" {

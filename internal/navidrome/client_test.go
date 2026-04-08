@@ -1,6 +1,7 @@
 package navidrome
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -31,7 +32,7 @@ func TestConnect_AuthenticationFailure(t *testing.T) {
 	cfg.Navidrome.User = "alice"
 	cfg.Navidrome.Password = "bad-password"
 
-	_, err := Connect(cfg, log.New(io.Discard))
+	_, err := Connect(context.Background(), cfg, log.New(io.Discard))
 	if err == nil || err.Error() != `authentication failed for user "alice" (check user/password)` {
 		t.Fatalf("Connect() error = %v", err)
 	}
@@ -73,7 +74,7 @@ func TestSearchSongsByTitle_DecodesUserRating(t *testing.T) {
 		})
 	})
 
-	results, err := client.SearchSongsByTitle("beatles", 2)
+	results, err := client.SearchSongsByTitle(context.Background(), "beatles", 2)
 	if err != nil {
 		t.Fatalf("SearchSongsByTitle() error = %v", err)
 	}
@@ -111,7 +112,7 @@ func TestSetRating_SendsExpectedRequest(t *testing.T) {
 		})
 	})
 
-	if err := client.SetRating("song-1", 5); err != nil {
+	if err := client.SetRating(context.Background(), "song-1", 5); err != nil {
 		t.Fatalf("SetRating() error = %v", err)
 	}
 }
