@@ -257,6 +257,70 @@ func TestSetRating_SendsExpectedRequest(t *testing.T) {
 	}
 }
 
+func TestSearchSongsByTitleFallback_LogsInAndUsesNativeSongEndpoint(t *testing.T) {
+	loginCalls := 0
+	client := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/auth/login":
+			loginCalls++
+			var body map[string]string
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Fatalf("Decode() error = %v", err)
+			}
+			if got := body["username"]; got != "admin" {
+				t.Fatalf("username = %q, want %q", got, "admin")
+			}
+			if got := body["password"]; got != "password" {
+				t.Fatalf("password = %q, want %q", got, "password")
+			}
+
+			writeJSON(t, w, map[string]any{
+				"token": "native-jwt",
+			})
+		case "/song":
+			if got := r.Header.Get(nativeAuthorizationHeader); got != "Bearer native-jwt" {
+				t.Fatalf("%s = %q, want %q", nativeAuthorizationHeader, got, "Bearer native-jwt")
+			}
+			if got := r.URL.Query().Get("title"); got != "Track Title" {
+				t.Fatalf("title = %q, want %q", got, "Track Title")
+			}
+			if got := r.URL.Query().Get("_end"); got != "2" {
+				t.Fatalf("_end = %q, want %q", got, "2")
+			}
+
+			writeJSON(t, w, []map[string]any{
+				{
+					"id":             "song-2",
+					"path":           "Artist/Album/Track Title.mp3",
+					"rating":         5,
+					"mbzRecordingID": "mbid-2",
+					"artist":         "Artist",
+					"album":          "Album",
+				},
+			})
+		default:
+			t.Fatalf("unexpected path %q", r.URL.Path)
+		}
+	})
+
+	results, err := client.SearchSongsByTitleFallback(context.Background(), "Track Title", 2)
+	if err != nil {
+		t.Fatalf("SearchSongsByTitleFallback() error = %v", err)
+	}
+	if loginCalls != 1 {
+		t.Fatalf("loginCalls = %d, want 1", loginCalls)
+	}
+	if len(results) != 1 {
+		t.Fatalf("len(results) = %d, want 1", len(results))
+	}
+	if results[0].UserRating != 5 {
+		t.Fatalf("results[0].UserRating = %d, want 5", results[0].UserRating)
+	}
+	if results[0].MusicBrainzID != "mbid-2" {
+		t.Fatalf("results[0].MusicBrainzID = %q, want %q", results[0].MusicBrainzID, "mbid-2")
+	}
+}
+
 func newTestClient(t *testing.T, handler http.HandlerFunc) *Client {
 	t.Helper()
 
@@ -273,6 +337,7 @@ func newTestClient(t *testing.T, handler http.HandlerFunc) *Client {
 		username: "admin",
 		password: "password",
 		http:     restyClient,
+		native:   newNativeSearchClient(server.URL, "admin", "password", httpClient, log.New(io.Discard)),
 		log:      log.New(io.Discard),
 	}
 }

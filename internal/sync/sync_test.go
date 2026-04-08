@@ -448,6 +448,69 @@ func TestMatchLocalToRemote_TriesLessSpecificQueriesWhenFirstSearchMisses(t *tes
 	}
 }
 
+func TestMatchLocalToRemote_UsesNativeFallbackWhenSubsonicFindsNoMatches(t *testing.T) {
+	searcher := &stubSongSearcher{
+		fallbackResults: map[string][]*navidrome.RemoteSong{
+			"Track Title": {
+				{ID: "fallback-match", Path: "Artist/Album/Track Title.mp3", UserRating: 5},
+			},
+		},
+	}
+
+	localFiles := []*LocalFile{{
+		RelPath:   "Artist/Album/Track Title.mp3",
+		LocalFile: &tag.LocalFile{Title: "Track Title", Artist: "Artist", Album: "Album"},
+	}}
+
+	report, err := matchLocalToRemote(context.Background(), localFiles, searcher, "", 0, testLogger())
+	if err != nil {
+		t.Fatalf("matchLocalToRemote() error = %v", err)
+	}
+	if len(report.matches) != 1 {
+		t.Fatalf("len(report.matches) = %d, want 1", len(report.matches))
+	}
+	if report.matches[0].remote.ID != "fallback-match" {
+		t.Fatalf("report.matches[0].remote.ID = %q, want %q", report.matches[0].remote.ID, "fallback-match")
+	}
+	if got, want := searcher.fallbackQueries, []string{"Track Title"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("fallbackQueries = %v, want %v", got, want)
+	}
+}
+
+func TestMatchLocalToRemote_DoesNotUseNativeFallbackWhenSubsonicReturnsCandidates(t *testing.T) {
+	searcher := &stubSongSearcher{
+		results: map[string][]*navidrome.RemoteSong{
+			"Track Title Artist Album": {
+				{ID: "subsonic-match", Path: "Artist/Album/Track Title.mp3"},
+			},
+		},
+		fallbackResults: map[string][]*navidrome.RemoteSong{
+			"Track Title": {
+				{ID: "fallback-match", Path: "Artist/Album/Track Title.mp3"},
+			},
+		},
+	}
+
+	localFiles := []*LocalFile{{
+		RelPath:   "Artist/Album/Track Title.mp3",
+		LocalFile: &tag.LocalFile{Title: "Track Title", Artist: "Artist", Album: "Album"},
+	}}
+
+	report, err := matchLocalToRemote(context.Background(), localFiles, searcher, "", 0, testLogger())
+	if err != nil {
+		t.Fatalf("matchLocalToRemote() error = %v", err)
+	}
+	if len(report.matches) != 1 {
+		t.Fatalf("len(report.matches) = %d, want 1", len(report.matches))
+	}
+	if report.matches[0].remote.ID != "subsonic-match" {
+		t.Fatalf("report.matches[0].remote.ID = %q, want %q", report.matches[0].remote.ID, "subsonic-match")
+	}
+	if len(searcher.fallbackQueries) != 0 {
+		t.Fatalf("len(fallbackQueries) = %d, want 0", len(searcher.fallbackQueries))
+	}
+}
+
 func TestMatchLocalToRemote_ReportsAmbiguousSuffixMatches(t *testing.T) {
 	searcher := &stubSongSearcher{
 		results: map[string][]*navidrome.RemoteSong{
@@ -505,6 +568,73 @@ func TestRun_IncludesAmbiguousEntriesInReport(t *testing.T) {
 	}
 }
 
+func TestRun_IncludesNoResultCountInSummary(t *testing.T) {
+	searcher := &stubSongSearcher{}
+	localFiles := []*LocalFile{{
+		RelPath:   "Artist/Album/Track Title.mp3",
+		LocalFile: &tag.LocalFile{Title: "Track Title", Artist: "Artist", Album: "Album"},
+	}}
+
+	output, err := Run(context.Background(), "", localFiles, searcher, "", "local", 0, true, testLogger())
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if got := output.Report.Summary.NoResults; got != 1 {
+		t.Fatalf("output.Report.Summary.NoResults = %d, want 1", got)
+	}
+	if got := output.Report.Summary.Unmatched; got != 1 {
+		t.Fatalf("output.Report.Summary.Unmatched = %d, want 1", got)
+	}
+	if got := output.Report.Summary.Warnings; got != 0 {
+		t.Fatalf("output.Report.Summary.Warnings = %d, want 0", got)
+	}
+	if got := output.Report.Summary.Errors; got != 0 {
+		t.Fatalf("output.Report.Summary.Errors = %d, want 0", got)
+	}
+}
+
+func TestRun_IncludesSearchWarningsAndErrorsInSummary(t *testing.T) {
+	searcher := &stubSongSearcher{
+		results:     map[string][]*navidrome.RemoteSong{},
+		fallbackErr: fmt.Errorf("native fallback unavailable"),
+	}
+	localFiles := []*LocalFile{{
+		RelPath:   "Artist/Album/Track Title.mp3",
+		LocalFile: &tag.LocalFile{Title: "Track Title", Artist: "Artist", Album: "Album"},
+	}}
+
+	output, err := Run(context.Background(), "", localFiles, searcher, "", "local", 0, true, testLogger())
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if got := output.Report.Summary.Warnings; got != 1 {
+		t.Fatalf("output.Report.Summary.Warnings = %d, want 1", got)
+	}
+	if len(output.Report.Warnings) != 1 {
+		t.Fatalf("len(output.Report.Warnings) = %d, want 1", len(output.Report.Warnings))
+	}
+	if got := output.Report.Warnings[0].Source; got != "native" {
+		t.Fatalf("output.Report.Warnings[0].Source = %q, want %q", got, "native")
+	}
+
+	searcher = &stubSongSearcher{
+		err: fmt.Errorf("subsonic search failed"),
+	}
+	output, err = Run(context.Background(), "", localFiles, searcher, "", "local", 0, true, testLogger())
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if got := output.Report.Summary.Errors; got != 3 {
+		t.Fatalf("output.Report.Summary.Errors = %d, want 3", got)
+	}
+	if len(output.Report.Errors) != 3 {
+		t.Fatalf("len(output.Report.Errors) = %d, want 3", len(output.Report.Errors))
+	}
+	if got := output.Report.Errors[0].Source; got != "subsonic" {
+		t.Fatalf("output.Report.Errors[0].Source = %q, want %q", got, "subsonic")
+	}
+}
+
 func TestApplyResults_ReturnsAggregateFailure(t *testing.T) {
 	results := []Result{{
 		Action:    ActionPull,
@@ -523,7 +653,7 @@ func TestWriteReportJSON_WritesStructuredReport(t *testing.T) {
 	path := filepath.Join(root, "reports", "sync.json")
 
 	report := RunReport{
-		Summary: ReportSummary{Matched: 1, Unmatched: 1, Ambiguous: 1},
+		Summary: ReportSummary{Matched: 1, Unmatched: 1, NoResults: 1, Ambiguous: 1, Warnings: 1, Errors: 1},
 		Matched: []MatchedEntry{{Path: "track.mp3"}},
 		Unmatched: []UnresolvedEntry{{
 			Path:   "missing.mp3",
@@ -533,6 +663,8 @@ func TestWriteReportJSON_WritesStructuredReport(t *testing.T) {
 			Path:   "ambiguous.mp3",
 			Reason: "multiple candidates tied for suffix path match",
 		}},
+		Warnings: []IssueEntry{{Path: "warn.mp3", Source: "native", Stage: "search_fallback", Message: "fallback failed"}},
+		Errors:   []IssueEntry{{Path: "err.mp3", Source: "subsonic", Stage: "search", Message: "search failed"}},
 	}
 
 	if err := WriteReportJSON(path, report); err != nil {
@@ -550,6 +682,21 @@ func TestWriteReportJSON_WritesStructuredReport(t *testing.T) {
 	}
 	if got := decoded.Summary.Ambiguous; got != 1 {
 		t.Fatalf("decoded.Summary.Ambiguous = %d, want 1", got)
+	}
+	if got := decoded.Summary.NoResults; got != 1 {
+		t.Fatalf("decoded.Summary.NoResults = %d, want 1", got)
+	}
+	if got := decoded.Summary.Warnings; got != 1 {
+		t.Fatalf("decoded.Summary.Warnings = %d, want 1", got)
+	}
+	if got := decoded.Summary.Errors; got != 1 {
+		t.Fatalf("decoded.Summary.Errors = %d, want 1", got)
+	}
+	if len(decoded.Warnings) != 1 {
+		t.Fatalf("len(decoded.Warnings) = %d, want 1", len(decoded.Warnings))
+	}
+	if len(decoded.Errors) != 1 {
+		t.Fatalf("len(decoded.Errors) = %d, want 1", len(decoded.Errors))
 	}
 }
 
@@ -573,11 +720,15 @@ func testLogger() *log.Logger {
 }
 
 type stubSongSearcher struct {
-	mu      sync.Mutex
-	queries []string
-	limits  []int
-	results map[string][]*navidrome.RemoteSong
-	err     error
+	mu              sync.Mutex
+	queries         []string
+	limits          []int
+	fallbackQueries []string
+	fallbackLimits  []int
+	results         map[string][]*navidrome.RemoteSong
+	fallbackResults map[string][]*navidrome.RemoteSong
+	err             error
+	fallbackErr     error
 }
 
 func (s *stubSongSearcher) SearchSongsByTitle(ctx context.Context, title string, limit int) ([]*navidrome.RemoteSong, error) {
@@ -593,4 +744,19 @@ func (s *stubSongSearcher) SearchSongsByTitle(ctx context.Context, title string,
 		return nil, s.err
 	}
 	return s.results[title], nil
+}
+
+func (s *stubSongSearcher) SearchSongsByTitleFallback(ctx context.Context, title string, limit int) ([]*navidrome.RemoteSong, error) {
+	if ctx == nil {
+		return nil, fmt.Errorf("context is nil")
+	}
+	s.mu.Lock()
+	s.fallbackQueries = append(s.fallbackQueries, title)
+	s.fallbackLimits = append(s.fallbackLimits, limit)
+	s.mu.Unlock()
+
+	if s.fallbackErr != nil {
+		return nil, s.fallbackErr
+	}
+	return s.fallbackResults[title], nil
 }

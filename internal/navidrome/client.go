@@ -46,6 +46,7 @@ type Client struct {
 	username string
 	password string
 	http     *resty.Client
+	native   *nativeSearchClient
 	log      *log.Logger
 }
 
@@ -80,7 +81,14 @@ func Connect(ctx context.Context, cfg *config.Config, logger *log.Logger) (*Clie
 		username: cfg.Navidrome.User,
 		password: cfg.Navidrome.Password,
 		http:     client,
-		log:      logger,
+		native: newNativeSearchClient(
+			strings.TrimRight(cfg.Navidrome.BaseURL, "/"),
+			cfg.Navidrome.User,
+			cfg.Navidrome.Password,
+			httpClient,
+			logger,
+		),
+		log: logger,
 	}
 
 	if err := c.Ping(ctx); err != nil {
@@ -151,11 +159,16 @@ func (c *Client) SearchSongsByTitle(ctx context.Context, title string, limit int
 	}
 
 	startedAt := time.Now()
-	c.log.Debug("Navidrome search request started", "query", title, "limit", limit)
+	c.log.Debug("Starting remote song search via Subsonic API",
+		"source", "subsonic",
+		"query", title,
+		"limit", limit,
+	)
 
 	searchResult, err := c.Search3(ctx, title, limit)
 	if err != nil {
-		c.log.Warn("Navidrome search request failed",
+		c.log.Warn("Remote song search via Subsonic API failed",
+			"source", "subsonic",
 			"query", title,
 			"limit", limit,
 			"duration", time.Since(startedAt),
@@ -164,7 +177,8 @@ func (c *Client) SearchSongsByTitle(ctx context.Context, title string, limit int
 		return nil, fmt.Errorf("searching tracks for %q: %w", title, err)
 	}
 
-	c.log.Debug("Navidrome search request completed",
+	c.log.Debug("Completed remote song search via Subsonic API",
+		"source", "subsonic",
 		"query", title,
 		"limit", limit,
 		"duration", time.Since(startedAt),
@@ -201,6 +215,18 @@ func (c *Client) SearchSongsByTitle(ctx context.Context, title string, limit int
 	}
 
 	return results, nil
+}
+
+func (c *Client) SearchSongsByTitleFallback(ctx context.Context, title string, limit int) ([]*RemoteSong, error) {
+	if c.native == nil {
+		c.log.Debug("Skipping native Navidrome fallback search because no native client is configured",
+			"source", "native",
+			"title", title,
+			"limit", limit,
+		)
+		return nil, nil
+	}
+	return c.native.SearchSongsByTitle(ctx, title, limit)
 }
 
 func searchResultSongs(result *SearchResult3) []Song {

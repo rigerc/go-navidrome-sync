@@ -62,6 +62,8 @@ type RunReport struct {
 	Matched   []MatchedEntry    `json:"matched"`
 	Unmatched []UnresolvedEntry `json:"unmatched"`
 	Ambiguous []UnresolvedEntry `json:"ambiguous"`
+	Warnings  []IssueEntry      `json:"warnings,omitempty"`
+	Errors    []IssueEntry      `json:"errors,omitempty"`
 }
 
 type ReportSummary struct {
@@ -71,7 +73,10 @@ type ReportSummary struct {
 	ConflictsResolved int  `json:"conflicts_resolved"`
 	Matched           int  `json:"matched"`
 	Unmatched         int  `json:"unmatched"`
+	NoResults         int  `json:"no_results"`
 	Ambiguous         int  `json:"ambiguous"`
+	Warnings          int  `json:"warnings"`
+	Errors            int  `json:"errors"`
 	DryRun            bool `json:"dry_run"`
 }
 
@@ -100,6 +105,14 @@ type CandidateEntry struct {
 	Score          int    `json:"score,omitempty"`
 }
 
+type IssueEntry struct {
+	Path    string `json:"path"`
+	Query   string `json:"query,omitempty"`
+	Source  string `json:"source"`
+	Stage   string `json:"stage"`
+	Message string `json:"message"`
+}
+
 type scanJob struct {
 	path    string
 	relPath string
@@ -121,6 +134,10 @@ type songSearcher interface {
 	SearchSongsByTitle(ctx context.Context, title string, limit int) ([]*navidrome.RemoteSong, error)
 }
 
+type fallbackSongSearcher interface {
+	SearchSongsByTitleFallback(ctx context.Context, title string, limit int) ([]*navidrome.RemoteSong, error)
+}
+
 type unmatchedFile struct {
 	path       string
 	query      string
@@ -139,6 +156,8 @@ type matchReport struct {
 	matches   []match
 	unmatched []unmatchedFile
 	ambiguous []unmatchedFile
+	warnings  []IssueEntry
+	errors    []IssueEntry
 }
 
 type searchRateLimiter struct {
@@ -257,12 +276,15 @@ func Run(
 		Matched:   make([]MatchedEntry, 0, len(report.matches)),
 		Unmatched: make([]UnresolvedEntry, 0, len(report.unmatched)),
 		Ambiguous: make([]UnresolvedEntry, 0, len(report.ambiguous)),
+		Warnings:  make([]IssueEntry, 0, len(report.warnings)),
+		Errors:    make([]IssueEntry, 0, len(report.errors)),
 	}
 
 	pushed := 0
 	pulled := 0
 	skipped := 0
 	conflicts := 0
+	noResults := 0
 
 	for _, m := range report.matches {
 		localRating := m.local.Rating
@@ -339,10 +361,15 @@ func Run(
 
 	for _, item := range report.unmatched {
 		runReport.Unmatched = append(runReport.Unmatched, unresolvedEntry(item))
+		if isNoResultUnmatched(item) {
+			noResults++
+		}
 	}
 	for _, item := range report.ambiguous {
 		runReport.Ambiguous = append(runReport.Ambiguous, unresolvedEntry(item))
 	}
+	runReport.Warnings = append(runReport.Warnings, report.warnings...)
+	runReport.Errors = append(runReport.Errors, report.errors...)
 
 	if dryRun {
 		for _, unmatched := range report.unmatched {
@@ -357,9 +384,26 @@ func Run(
 		"pushed", pushed, "pulled", pulled,
 		"skipped", skipped, "conflicts_resolved", conflicts,
 		"unmatched", len(report.unmatched),
+		"no_results", noResults,
 		"ambiguous", len(report.ambiguous),
+		"warnings", len(report.warnings),
+		"errors", len(report.errors),
 		"dry_run", dryRun,
 	)
+	if noResults > 0 {
+		log.Info("No-result summary", "count", noResults)
+		for _, item := range report.unmatched {
+			if !isNoResultUnmatched(item) {
+				continue
+			}
+			log.Info("No-result song",
+				"path", item.path,
+				"reason", item.reason,
+				"query", item.query,
+				"local_path", item.localPath,
+			)
+		}
+	}
 	if len(report.unmatched) > 0 {
 		log.Info("Unmatched summary", "count", len(report.unmatched))
 		for _, item := range report.unmatched {
@@ -382,6 +426,30 @@ func Run(
 			)
 		}
 	}
+	if len(report.warnings) > 0 {
+		log.Info("Warning summary", "count", len(report.warnings))
+		for _, item := range report.warnings {
+			log.Warn("Sync warning",
+				"path", item.Path,
+				"query", item.Query,
+				"source", item.Source,
+				"stage", item.Stage,
+				"message", item.Message,
+			)
+		}
+	}
+	if len(report.errors) > 0 {
+		log.Info("Error summary", "count", len(report.errors))
+		for _, item := range report.errors {
+			log.Error("Sync error",
+				"path", item.Path,
+				"query", item.Query,
+				"source", item.Source,
+				"stage", item.Stage,
+				"message", item.Message,
+			)
+		}
+	}
 
 	runReport.Summary = ReportSummary{
 		Pushed:            pushed,
@@ -390,7 +458,10 @@ func Run(
 		ConflictsResolved: conflicts,
 		Matched:           len(report.matches),
 		Unmatched:         len(report.unmatched),
+		NoResults:         noResults,
 		Ambiguous:         len(report.ambiguous),
+		Warnings:          len(report.warnings),
+		Errors:            len(report.errors),
 		DryRun:            dryRun,
 	}
 
@@ -412,6 +483,8 @@ type matchResult struct {
 	match     *match
 	unmatched *unmatchedFile
 	ambiguous *unmatchedFile
+	warnings  []IssueEntry
+	errors    []IssueEntry
 }
 
 func matchLocalToRemote(ctx context.Context, localFiles []*LocalFile, searcher songSearcher, remotePathPrefix string, searchInterval time.Duration, log *log.Logger) (*matchReport, error) {
@@ -498,6 +571,13 @@ func matchLocalToRemote(ctx context.Context, localFiles []*LocalFile, searcher s
 								reason:    fmt.Sprintf("search canceled: %v", err),
 								localPath: localPath,
 							},
+							errors: []IssueEntry{{
+								Path:    lf.RelPath,
+								Query:   query,
+								Source:  "subsonic",
+								Stage:   "search",
+								Message: fmt.Sprintf("search canceled: %v", err),
+							}},
 						}
 						continue
 					}
@@ -520,6 +600,13 @@ func matchLocalToRemote(ctx context.Context, localFiles []*LocalFile, searcher s
 								reason:    fmt.Sprintf("search failed: %v", err),
 								localPath: localPath,
 							},
+							errors: []IssueEntry{{
+								Path:    lf.RelPath,
+								Query:   query,
+								Source:  "subsonic",
+								Stage:   "search",
+								Message: err.Error(),
+							}},
 						}
 						continue
 					}
@@ -596,6 +683,99 @@ func matchLocalToRemote(ctx context.Context, localFiles []*LocalFile, searcher s
 					continue
 				}
 
+				if fallbackSearcher, ok := searcher.(fallbackSongSearcher); ok {
+					fallbackQuery := fallbackSearchQuery(lf)
+					if fallbackQuery != "" {
+						log.Debug("Attempting native Navidrome fallback search",
+							"path", lf.RelPath,
+							"source", "native",
+							"title", fallbackQuery,
+						)
+						candidates, err := fallbackSearcher.SearchSongsByTitleFallback(ctx, fallbackQuery, maxSearchHits)
+						if err != nil {
+							log.Warn("Native Navidrome fallback search failed",
+								"path", lf.RelPath,
+								"source", "native",
+								"title", fallbackQuery,
+								"error", err,
+							)
+							results <- matchResult{
+								index: index,
+								warnings: []IssueEntry{{
+									Path:    lf.RelPath,
+									Query:   fallbackQuery,
+									Source:  "native",
+									Stage:   "search_fallback",
+									Message: err.Error(),
+								}},
+							}
+						} else if len(candidates) > 0 {
+							log.Debug("Native Navidrome fallback search returned candidates",
+								"path", lf.RelPath,
+								"source", "native",
+								"title", fallbackQuery,
+								"candidate_count", len(candidates),
+							)
+							selection := selectCandidate(lf, candidates, localPath, remotePathPrefix)
+							if selection.match != nil {
+								results <- matchResult{
+									index: index,
+									match: &match{local: lf, remote: selection.match, method: selection.method, query: fallbackQuery},
+								}
+								log.Debug("Matched remote song using native Navidrome fallback",
+									"local", lf.RelPath,
+									"remote", selection.match.Path,
+									"source", "native",
+									"title", fallbackQuery,
+									"method", selection.method,
+								)
+								goto nextFile
+							}
+							if selection.reason != "" {
+								results <- matchResult{
+									index: index,
+									ambiguous: &unmatchedFile{
+										path:       lf.RelPath,
+										query:      fallbackQuery,
+										reason:     selection.reason,
+										localPath:  localPath,
+										candidates: selection.candidates,
+									},
+								}
+								goto nextFile
+							}
+							bestUnmatched = &unmatchedFile{
+								path:       lf.RelPath,
+								query:      fallbackQuery,
+								reason:     "candidate paths did not match local path",
+								localPath:  localPath,
+								candidates: candidateEntries(candidates, remotePathPrefix, 0),
+							}
+						} else {
+							log.Debug("Native Navidrome fallback search returned no candidates",
+								"path", lf.RelPath,
+								"source", "native",
+								"title", fallbackQuery,
+							)
+						}
+					}
+				}
+
+				if bestUnmatched != nil {
+					log.Debug("Native fallback candidates did not match local path",
+						"path", lf.RelPath,
+						"source", "native",
+						"query", bestUnmatched.query,
+						"candidate_count", len(bestUnmatched.candidates),
+						"local_path", localPath,
+					)
+					results <- matchResult{
+						index:     index,
+						unmatched: bestUnmatched,
+					}
+					continue
+				}
+
 				log.Debug("Remote search returned no candidates",
 					"path", lf.RelPath,
 					"queries", queries,
@@ -629,6 +809,8 @@ func matchLocalToRemote(ctx context.Context, localFiles []*LocalFile, searcher s
 	matchesByIndex := make(map[int]*match, len(sorted))
 	unmatchedByIndex := make(map[int]*unmatchedFile, len(sorted))
 	ambiguousByIndex := make(map[int]*unmatchedFile, len(sorted))
+	orderedWarnings := make([]IssueEntry, 0)
+	orderedErrors := make([]IssueEntry, 0)
 	processed := 0
 	for result := range results {
 		processed++
@@ -640,6 +822,12 @@ func matchLocalToRemote(ctx context.Context, localFiles []*LocalFile, searcher s
 		}
 		if result.ambiguous != nil {
 			ambiguousByIndex[result.index] = result.ambiguous
+		}
+		if len(result.warnings) > 0 {
+			orderedWarnings = append(orderedWarnings, result.warnings...)
+		}
+		if len(result.errors) > 0 {
+			orderedErrors = append(orderedErrors, result.errors...)
 		}
 		if processed%progressInterval == 0 || processed == len(sorted) {
 			log.Info("Remote matching progress",
@@ -669,7 +857,13 @@ func matchLocalToRemote(ctx context.Context, localFiles []*LocalFile, searcher s
 		}
 	}
 
-	return &matchReport{matches: orderedMatches, unmatched: orderedUnmatched, ambiguous: orderedAmbiguous}, nil
+	return &matchReport{
+		matches:   orderedMatches,
+		unmatched: orderedUnmatched,
+		ambiguous: orderedAmbiguous,
+		warnings:  orderedWarnings,
+		errors:    orderedErrors,
+	}, nil
 }
 
 type selection struct {
@@ -800,6 +994,15 @@ func searchQueries(localFile *LocalFile) []string {
 		queries = append(queries, candidate)
 	}
 	return queries
+}
+
+func fallbackSearchQuery(localFile *LocalFile) string {
+	pathArtist, _, pathTitle := pathMetadata(localFile.RelPath)
+	return firstNonEmpty(localFile.Title, pathTitle, pathArtist)
+}
+
+func isNoResultUnmatched(item unmatchedFile) bool {
+	return item.reason == "search returned no song candidates"
 }
 
 func pathMetadata(relPath string) (artist string, album string, title string) {
