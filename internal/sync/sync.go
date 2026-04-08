@@ -474,10 +474,12 @@ func matchLocalToRemote(localFiles []*LocalFile, searcher songSearcher, remotePa
 		}()
 	}
 
-	for i := range sorted {
-		jobs <- i
-	}
-	close(jobs)
+	go func() {
+		for i := range sorted {
+			jobs <- i
+		}
+		close(jobs)
+	}()
 
 	go func() {
 		workers.Wait()

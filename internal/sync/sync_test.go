@@ -177,6 +177,53 @@ func TestMatchLocalToRemote_FallsBackToFilenameTitle(t *testing.T) {
 	}
 }
 
+func TestMatchLocalToRemote_DoesNotDeadlockWhenSearchesReturnImmediately(t *testing.T) {
+	localFiles := make([]*LocalFile, 0, 64)
+	results := make(map[string][]*navidrome.RemoteSong, 64)
+	for i := range 64 {
+		relPath := filepath.ToSlash(filepath.Join("artist", fmt.Sprintf("track-%02d.mp3", i)))
+		query := fmt.Sprintf("Track %02d Artist Album", i)
+		localFiles = append(localFiles, &LocalFile{
+			RelPath: relPath,
+			LocalFile: &tag.LocalFile{
+				Title:  fmt.Sprintf("Track %02d", i),
+				Artist: "Artist",
+				Album:  "Album",
+			},
+		})
+		results[query] = []*navidrome.RemoteSong{{
+			ID:   fmt.Sprintf("song-%02d", i),
+			Path: relPath,
+		}}
+	}
+
+	searcher := &stubSongSearcher{results: results}
+
+	done := make(chan struct{})
+	var report *matchReport
+	var err error
+	go func() {
+		report, err = matchLocalToRemote(localFiles, searcher, "", testLogger())
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("matchLocalToRemote() timed out, likely deadlocked")
+	}
+
+	if err != nil {
+		t.Fatalf("matchLocalToRemote() error = %v", err)
+	}
+	if len(report.matches) != len(localFiles) {
+		t.Fatalf("len(report.matches) = %d, want %d", len(report.matches), len(localFiles))
+	}
+	if len(report.unmatched) != 0 {
+		t.Fatalf("len(report.unmatched) = %d, want 0", len(report.unmatched))
+	}
+}
+
 func TestMatchLocalToRemote_StripsRemotePathPrefix(t *testing.T) {
 	searcher := &stubSongSearcher{
 		results: map[string][]*navidrome.RemoteSong{
