@@ -90,7 +90,7 @@ type UnresolvedEntry struct {
 	Query          string           `json:"query,omitempty"`
 	Reason         string           `json:"reason"`
 	LocalPath      string           `json:"local_path"`
-	LocalCanonical string           `json:"local_canonical"`
+	LocalCanonical string           `json:"local_canonical,omitempty"`
 	Candidates     []CandidateEntry `json:"candidates,omitempty"`
 }
 
@@ -106,8 +106,7 @@ type scanJob struct {
 }
 
 var (
-	discPrefixRe     = regexp.MustCompile(`^\d+-`)
-	trackDashRe      = regexp.MustCompile(`^(\d+(?:-\d+)?)(?:\s*-\s+|\s+)`)
+	trackPrefixRe    = regexp.MustCompile(`^(\d+(?:-\d+)?)(?:\s*-\s*|\s+)`)
 	songCleanRe      = regexp.MustCompile(`[^a-z0-9]+`)
 	readLocalFile    = tag.ReadLocalFile
 	audioFileExts    = map[string]struct{}{".mp3": {}, ".flac": {}}
@@ -116,6 +115,7 @@ var (
 	maxMatchWorkers  = 4
 	minSuffixScore   = 3
 	progressInterval = 25
+	searchInterval   = 100 * time.Millisecond
 )
 
 type songSearcher interface {
@@ -123,12 +123,11 @@ type songSearcher interface {
 }
 
 type unmatchedFile struct {
-	path           string
-	query          string
-	reason         string
-	localPath      string
-	localCanonical string
-	candidates     []candidatePath
+	path       string
+	query      string
+	reason     string
+	localPath  string
+	candidates []candidatePath
 }
 
 type candidatePath struct {
@@ -141,6 +140,12 @@ type matchReport struct {
 	matches   []match
 	unmatched []unmatchedFile
 	ambiguous []unmatchedFile
+}
+
+type searchRateLimiter struct {
+	interval time.Duration
+	mu       sync.Mutex
+	next     time.Time
 }
 
 func ScanLocalFiles(musicPath string, log *log.Logger) ([]*LocalFile, error) {
@@ -264,7 +269,7 @@ func Run(
 		remoteRating := m.remote.UserRating
 		runReport.Matched = append(runReport.Matched, MatchedEntry{
 			Path:         m.local.RelPath,
-			Query:        searchQuery(m.local),
+			Query:        m.query,
 			Method:       m.method,
 			RemoteID:     m.remote.ID,
 			RemotePath:   m.remote.Path,
@@ -399,6 +404,7 @@ type match struct {
 	local  *LocalFile
 	remote *navidrome.RemoteSong
 	method string
+	query  string
 }
 
 type matchResult struct {
@@ -431,12 +437,14 @@ func matchLocalToRemote(ctx context.Context, localFiles []*LocalFile, searcher s
 		"total", len(sorted),
 		"workers", workerCount,
 		"remote_path_prefix", remotePathPrefix,
+		"search_interval", searchInterval,
 	)
 
 	jobs := make(chan int, workerCount*2)
 	results := make(chan matchResult, workerCount*2)
 	var startedSearches atomic.Int64
 	var inFlightSearches atomic.Int64
+	limiter := newSearchRateLimiter(searchInterval)
 
 	var workers sync.WaitGroup
 	workers.Add(workerCount)
@@ -445,149 +453,163 @@ func matchLocalToRemote(ctx context.Context, localFiles []*LocalFile, searcher s
 			defer workers.Done()
 			for index := range jobs {
 				lf := sorted[index]
-				query := searchQuery(lf)
+				queries := searchQueries(lf)
+				query := strings.Join(queries, " | ")
 				log.Debug("Matching local file",
 					"index", index+1,
 					"total", len(sorted),
 					"path", lf.RelPath,
 					"query", query,
 				)
-				if query == "" {
+				if len(queries) == 0 {
 					log.Debug("Skipping remote search for local file with empty query", "path", lf.RelPath)
 					results <- matchResult{
 						index: index,
 						unmatched: &unmatchedFile{
-							path:           lf.RelPath,
-							reason:         "empty search query",
-							localPath:      normalizePath(lf.RelPath, ""),
-							localCanonical: canonicalizePath(normalizePath(lf.RelPath, "")),
+							path:      lf.RelPath,
+							reason:    "empty search query",
+							localPath: normalizePath(lf.RelPath, ""),
 						},
 					}
 					continue
 				}
 
-				searchNumber := startedSearches.Add(1)
-				inFlight := inFlightSearches.Add(1)
-				startedAt := time.Now()
-				log.Debug("Starting remote song search",
-					"index", index+1,
-					"total", len(sorted),
-					"path", lf.RelPath,
-					"query", query,
-					"search_number", searchNumber,
-					"in_flight", inFlight,
-				)
-				candidates, err := searcher.SearchSongsByTitle(ctx, query, maxSearchHits)
-				searchDuration := time.Since(startedAt)
-				inFlight = inFlightSearches.Add(-1)
-				if err != nil {
-					log.Warn("Failed to search remote song",
+				localPath := normalizePath(lf.RelPath, "")
+				var bestUnmatched *unmatchedFile
+				for _, query := range queries {
+					searchNumber := startedSearches.Add(1)
+					inFlight := inFlightSearches.Add(1)
+					startedAt := time.Now()
+					log.Debug("Starting remote song search",
+						"index", index+1,
+						"total", len(sorted),
 						"path", lf.RelPath,
 						"query", query,
-						"error", err,
+						"search_number", searchNumber,
+						"in_flight", inFlight,
+					)
+					if err := limiter.Wait(ctx); err != nil {
+						inFlight = inFlightSearches.Add(-1)
+						results <- matchResult{
+							index: index,
+							unmatched: &unmatchedFile{
+								path:      lf.RelPath,
+								query:     query,
+								reason:    fmt.Sprintf("search canceled: %v", err),
+								localPath: localPath,
+							},
+						}
+						continue
+					}
+					candidates, err := searcher.SearchSongsByTitle(ctx, query, maxSearchHits)
+					searchDuration := time.Since(startedAt)
+					inFlight = inFlightSearches.Add(-1)
+					if err != nil {
+						log.Warn("Failed to search remote song",
+							"path", lf.RelPath,
+							"query", query,
+							"error", err,
+							"duration", searchDuration,
+							"in_flight", inFlight,
+						)
+						results <- matchResult{
+							index: index,
+							unmatched: &unmatchedFile{
+								path:      lf.RelPath,
+								query:     query,
+								reason:    fmt.Sprintf("search failed: %v", err),
+								localPath: localPath,
+							},
+						}
+						continue
+					}
+					log.Debug("Completed remote song search",
+						"index", index+1,
+						"total", len(sorted),
+						"path", lf.RelPath,
+						"query", query,
+						"candidate_count", len(candidates),
 						"duration", searchDuration,
 						"in_flight", inFlight,
 					)
-					results <- matchResult{
-						index: index,
-						unmatched: &unmatchedFile{
-							path:           lf.RelPath,
-							query:          query,
-							reason:         fmt.Sprintf("search failed: %v", err),
-							localPath:      normalizePath(lf.RelPath, ""),
-							localCanonical: canonicalizePath(normalizePath(lf.RelPath, "")),
-						},
-					}
-					continue
-				}
-				log.Debug("Completed remote song search",
-					"index", index+1,
-					"total", len(sorted),
-					"path", lf.RelPath,
-					"query", query,
-					"candidate_count", len(candidates),
-					"duration", searchDuration,
-					"in_flight", inFlight,
-				)
 
-				localPath := normalizePath(lf.RelPath, "")
-				localCanonicalPath := canonicalizePath(localPath)
-				candidatePaths := make([]candidatePath, 0, len(candidates))
-				for _, candidate := range candidates {
-					normalizedRemotePath := normalizePath(candidate.Path, remotePathPrefix)
-					candidatePaths = append(candidatePaths, candidatePath{
-						raw:        candidate.Path,
-						normalized: canonicalizePath(normalizedRemotePath),
-					})
-				}
-				selection := selectCandidate(lf, candidates, localPath, localCanonicalPath, remotePathPrefix)
+					if len(candidates) == 0 {
+						continue
+					}
 
-				if selection.match != nil {
-					results <- matchResult{
-						index: index,
-						match: &match{local: lf, remote: selection.match, method: selection.method},
+					candidatePaths := make([]candidatePath, 0, len(candidates))
+					for _, candidate := range candidates {
+						candidatePaths = append(candidatePaths, candidatePath{
+							raw:        candidate.Path,
+							normalized: normalizePath(candidate.Path, remotePathPrefix),
+						})
 					}
-					log.Debug("Matched remote song",
-						"local", lf.RelPath,
-						"remote", selection.match.Path,
-						"query", query,
-						"method", selection.method,
-					)
-					continue
-				}
-				if selection.reason != "" {
-					results <- matchResult{
-						index: index,
-						ambiguous: &unmatchedFile{
-							path:           lf.RelPath,
-							query:          query,
-							reason:         selection.reason,
-							localPath:      localPath,
-							localCanonical: localCanonicalPath,
-							candidates:     selection.candidates,
-						},
+					selection := selectCandidate(lf, candidates, localPath, remotePathPrefix)
+
+					if selection.match != nil {
+						results <- matchResult{
+							index: index,
+							match: &match{local: lf, remote: selection.match, method: selection.method, query: query},
+						}
+						log.Debug("Matched remote song",
+							"local", lf.RelPath,
+							"remote", selection.match.Path,
+							"query", query,
+							"method", selection.method,
+						)
+						goto nextFile
 					}
-					continue
+					if selection.reason != "" {
+						results <- matchResult{
+							index: index,
+							ambiguous: &unmatchedFile{
+								path:       lf.RelPath,
+								query:      query,
+								reason:     selection.reason,
+								localPath:  localPath,
+								candidates: selection.candidates,
+							},
+						}
+						goto nextFile
+					}
+
+					bestUnmatched = &unmatchedFile{
+						path:       lf.RelPath,
+						query:      query,
+						reason:     "candidate paths did not match local path",
+						localPath:  localPath,
+						candidates: candidatePaths,
+					}
 				}
 
-				if len(candidatePaths) == 0 {
-					log.Debug("Remote search returned no candidates",
-						"path", lf.RelPath,
-						"query", query,
-					)
-					results <- matchResult{
-						index: index,
-						unmatched: &unmatchedFile{
-							path:           lf.RelPath,
-							query:          query,
-							reason:         "search returned no song candidates",
-							localPath:      localPath,
-							localCanonical: localCanonicalPath,
-						},
-					}
-					continue
-				}
-
-				if _, ok := matchesByPath(candidatePaths, localPath); !ok {
+				if bestUnmatched != nil {
 					log.Debug("Remote candidates did not match local path",
 						"path", lf.RelPath,
-						"query", query,
-						"candidate_count", len(candidatePaths),
+						"query", bestUnmatched.query,
+						"candidate_count", len(bestUnmatched.candidates),
 						"local_path", localPath,
-						"local_canonical_path", localCanonicalPath,
 					)
 					results <- matchResult{
-						index: index,
-						unmatched: &unmatchedFile{
-							path:           lf.RelPath,
-							query:          query,
-							reason:         "candidate paths did not match local path",
-							localPath:      localPath,
-							localCanonical: localCanonicalPath,
-							candidates:     candidatePaths,
-						},
+						index:     index,
+						unmatched: bestUnmatched,
 					}
+					continue
 				}
+
+				log.Debug("Remote search returned no candidates",
+					"path", lf.RelPath,
+					"queries", queries,
+				)
+				results <- matchResult{
+					index: index,
+					unmatched: &unmatchedFile{
+						path:      lf.RelPath,
+						query:     strings.Join(queries, " | "),
+						reason:    "search returned no song candidates",
+						localPath: localPath,
+					},
+				}
+			nextFile:
 			}
 		}()
 	}
@@ -661,7 +683,6 @@ func selectCandidate(
 	localFile *LocalFile,
 	candidates []*navidrome.RemoteSong,
 	localPath string,
-	localCanonicalPath string,
 	remotePathPrefix string,
 ) selection {
 	if localFile.MusicBrainzID != "" {
@@ -686,17 +707,7 @@ func selectCandidate(
 		return result
 	}
 
-	canonicalMatches := make([]*navidrome.RemoteSong, 0, 1)
-	for _, candidate := range candidates {
-		if canonicalizePath(normalizePath(candidate.Path, remotePathPrefix)) == localCanonicalPath {
-			canonicalMatches = append(canonicalMatches, candidate)
-		}
-	}
-	if result, ok := selectUniqueCandidate(canonicalMatches, "path_canonical", "multiple candidates matched canonical local path", remotePathPrefix); ok {
-		return result
-	}
-
-	if result, ok := bestSuffixPathCandidate(localFile, candidates, localCanonicalPath, remotePathPrefix); ok {
+	if result, ok := bestSuffixPathCandidate(localFile, candidates, localPath, remotePathPrefix); ok {
 		return result
 	}
 
@@ -722,24 +733,111 @@ func selectUniqueCandidate(
 	}
 }
 
+func newSearchRateLimiter(interval time.Duration) *searchRateLimiter {
+	return &searchRateLimiter{interval: interval}
+}
+
+func (l *searchRateLimiter) Wait(ctx context.Context) error {
+	if l == nil || l.interval <= 0 {
+		return nil
+	}
+
+	l.mu.Lock()
+	now := time.Now()
+	if l.next.IsZero() || !now.Before(l.next) {
+		l.next = now.Add(l.interval)
+		l.mu.Unlock()
+		return nil
+	}
+
+	waitUntil := l.next
+	l.next = l.next.Add(l.interval)
+	l.mu.Unlock()
+
+	timer := time.NewTimer(time.Until(waitUntil))
+	defer timer.Stop()
+
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
+
 func searchQuery(localFile *LocalFile) string {
-	var parts []string
+	queries := searchQueries(localFile)
+	if len(queries) == 0 {
+		return ""
+	}
+	return queries[0]
+}
 
-	if localFile.Title != "" {
-		parts = append(parts, localFile.Title)
-	}
-	if localFile.Artist != "" {
-		parts = append(parts, localFile.Artist)
-	}
-	if localFile.Album != "" {
-		parts = append(parts, localFile.Album)
-	}
-	if len(parts) > 0 {
-		return strings.Join(parts, " ")
+func searchQueries(localFile *LocalFile) []string {
+	pathArtist, pathAlbum, pathTitle := pathMetadata(localFile.RelPath)
+
+	title := firstNonEmpty(localFile.Title, pathTitle)
+	artist := firstNonEmpty(localFile.Artist, pathArtist)
+	album := firstNonEmpty(localFile.Album, pathAlbum)
+
+	candidates := []string{
+		joinQueryParts(title, artist, album),
+		joinQueryParts(title, artist),
+		joinQueryParts(title),
 	}
 
-	base := filepath.Base(localFile.RelPath)
-	return strings.TrimSuffix(base, filepath.Ext(base))
+	queries := make([]string, 0, len(candidates))
+	seen := make(map[string]struct{}, len(candidates))
+	for _, candidate := range candidates {
+		candidate = strings.TrimSpace(candidate)
+		if candidate == "" {
+			continue
+		}
+		if _, ok := seen[candidate]; ok {
+			continue
+		}
+		seen[candidate] = struct{}{}
+		queries = append(queries, candidate)
+	}
+	return queries
+}
+
+func pathMetadata(relPath string) (artist string, album string, title string) {
+	parts := strings.Split(filepath.ToSlash(relPath), "/")
+	if len(parts) == 0 {
+		return "", "", ""
+	}
+
+	title = trackTitleFromPathPart(parts[len(parts)-1])
+	if len(parts) >= 2 {
+		album = parts[len(parts)-2]
+	}
+	if len(parts) >= 3 {
+		artist = parts[len(parts)-3]
+	}
+	return artist, album, title
+}
+
+func joinQueryParts(parts ...string) string {
+	filtered := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		filtered = append(filtered, part)
+	}
+	return strings.Join(filtered, " ")
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func normalizePath(path string, remotePathPrefix string) string {
@@ -761,54 +859,10 @@ func normalizePath(path string, remotePathPrefix string) string {
 	return strings.ToLower(path)
 }
 
-func canonicalizePath(path string) string {
-	parts := strings.Split(path, "/")
-	for i, part := range parts {
-		parts[i] = canonicalizePathPart(part)
-	}
-	return strings.Join(parts, "/")
-}
-
-func canonicalizePathPart(part string) string {
-	matches := trackDashRe.FindStringSubmatch(part)
-	if len(matches) < 2 {
-		return part
-	}
-
-	prefix := canonicalizeTrackPrefix(matches[1])
-	remainder := strings.TrimSpace(strings.TrimPrefix(part, matches[0]))
-	if remainder == "" {
-		return prefix
-	}
-	return prefix + " - " + remainder
-}
-
-func canonicalizeTrackPrefix(prefix string) string {
-	segments := strings.Split(prefix, "-")
-	if len(segments) == 1 {
-		segment := strings.TrimLeft(segments[0], "0")
-		if segment == "" {
-			segment = "0"
-		}
-		return segment
-	}
-	for i, segment := range segments {
-		segment = strings.TrimLeft(segment, "0")
-		if segment == "" {
-			segment = "0"
-		}
-		segments[i] = segment
-	}
-	if len(segments) == 2 && segments[0] == "1" {
-		return segments[1]
-	}
-	return strings.Join(segments, "-")
-}
-
 func bestSuffixPathCandidate(
 	localFile *LocalFile,
 	candidates []*navidrome.RemoteSong,
-	localCanonicalPath string,
+	localPath string,
 	remotePathPrefix string,
 ) (selection, bool) {
 	bestScore := 0
@@ -816,7 +870,7 @@ func bestSuffixPathCandidate(
 	tied := make([]*navidrome.RemoteSong, 0, 2)
 
 	for _, candidate := range candidates {
-		score := suffixPathScore(localFile, localCanonicalPath, canonicalizePath(normalizePath(candidate.Path, remotePathPrefix)))
+		score := suffixPathScore(localFile, localPath, normalizePath(candidate.Path, remotePathPrefix))
 		if score < minSuffixScore {
 			continue
 		}
@@ -848,16 +902,16 @@ func candidateEntries(candidates []*navidrome.RemoteSong, remotePathPrefix strin
 	for _, candidate := range candidates {
 		entries = append(entries, candidatePath{
 			raw:        candidate.Path,
-			normalized: canonicalizePath(normalizePath(candidate.Path, remotePathPrefix)),
+			normalized: normalizePath(candidate.Path, remotePathPrefix),
 			score:      score,
 		})
 	}
 	return entries
 }
 
-func suffixPathScore(localFile *LocalFile, localCanonicalPath string, remoteCanonicalPath string) int {
-	localParts := strings.Split(localCanonicalPath, "/")
-	remoteParts := strings.Split(remoteCanonicalPath, "/")
+func suffixPathScore(localFile *LocalFile, localPath string, remotePath string) int {
+	localParts := strings.Split(localPath, "/")
+	remoteParts := strings.Split(remotePath, "/")
 	if len(localParts) == 0 || len(remoteParts) == 0 {
 		return 0
 	}
@@ -884,7 +938,7 @@ func suffixPathScore(localFile *LocalFile, localCanonicalPath string, remoteCano
 
 func trackTitleFromPathPart(pathPart string) string {
 	name := strings.TrimSuffix(pathPart, filepath.Ext(pathPart))
-	if matches := trackDashRe.FindStringSubmatch(name); len(matches) > 0 {
+	if matches := trackPrefixRe.FindStringSubmatch(name); len(matches) > 0 {
 		name = strings.TrimSpace(strings.TrimPrefix(name, matches[0]))
 	}
 	return name
@@ -915,7 +969,7 @@ func formatMatchedDryRunMessage(m match, localRating int, remoteRating int) stri
 	lines := []string{
 		"[DRY-RUN] Matched remote song",
 		fmt.Sprintf("  local path: %s", m.local.RelPath),
-		fmt.Sprintf("  query: %s", searchQuery(m.local)),
+		fmt.Sprintf("  query: %s", m.query),
 		fmt.Sprintf("  method: %s", m.method),
 		fmt.Sprintf("  remote path: %s", m.remote.Path),
 	}
@@ -940,7 +994,6 @@ func formatUnmatchedDryRunMessage(unmatched unmatchedFile) string {
 	lines = append(lines,
 		fmt.Sprintf("  reason: %s", unmatched.reason),
 		fmt.Sprintf("  normalized local path: %s", unmatched.localPath),
-		fmt.Sprintf("  canonical local path: %s", unmatched.localCanonical),
 	)
 	if len(unmatched.candidates) == 0 {
 		lines = append(lines, "  remote candidates: <none>")
@@ -966,7 +1019,6 @@ func formatAmbiguousDryRunMessage(ambiguous unmatchedFile) string {
 	lines = append(lines,
 		fmt.Sprintf("  reason: %s", ambiguous.reason),
 		fmt.Sprintf("  normalized local path: %s", ambiguous.localPath),
-		fmt.Sprintf("  canonical local path: %s", ambiguous.localCanonical),
 	)
 	if len(ambiguous.candidates) == 0 {
 		lines = append(lines, "  remote candidates: <none>")
@@ -1079,11 +1131,10 @@ func WriteReportJSON(path string, report RunReport) error {
 
 func unresolvedEntry(item unmatchedFile) UnresolvedEntry {
 	entry := UnresolvedEntry{
-		Path:           item.path,
-		Query:          item.query,
-		Reason:         item.reason,
-		LocalPath:      item.localPath,
-		LocalCanonical: item.localCanonical,
+		Path:      item.path,
+		Query:     item.query,
+		Reason:    item.reason,
+		LocalPath: item.localPath,
 	}
 	if len(item.candidates) == 0 {
 		return entry

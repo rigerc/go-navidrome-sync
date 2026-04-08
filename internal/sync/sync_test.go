@@ -17,6 +17,14 @@ import (
 	"github.com/rigerc/go-navidrome-ratings-sync/internal/tag"
 )
 
+func TestMain(m *testing.M) {
+	originalSearchInterval := searchInterval
+	searchInterval = 0
+	code := m.Run()
+	searchInterval = originalSearchInterval
+	os.Exit(code)
+}
+
 func TestScanLocalFiles_SortsFiltersAndKeepsUnreadableFiles(t *testing.T) {
 	root := t.TempDir()
 
@@ -154,7 +162,7 @@ func TestMatchLocalToRemote_UsesTitleQueryAndPathMatch(t *testing.T) {
 func TestMatchLocalToRemote_FallsBackToFilenameTitle(t *testing.T) {
 	searcher := &stubSongSearcher{
 		results: map[string][]*navidrome.RemoteSong{
-			"01-track title": {
+			"track title artist": {
 				{ID: "match", Path: "artist/01-track title.flac", UserRating: 3},
 			},
 		},
@@ -174,7 +182,7 @@ func TestMatchLocalToRemote_FallsBackToFilenameTitle(t *testing.T) {
 	if len(report.matches) != 1 {
 		t.Fatalf("len(report.matches) = %d, want 1", len(report.matches))
 	}
-	if got, want := searcher.queries, []string{"01-track title"}; !reflect.DeepEqual(got, want) {
+	if got, want := searcher.queries, []string{"track title artist"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("queries = %v, want %v", got, want)
 	}
 }
@@ -317,114 +325,6 @@ func TestMatchLocalToRemote_ReportsUnmatchedCandidates(t *testing.T) {
 	}
 }
 
-func TestMatchLocalToRemote_CanonicalizesZeroPaddedTrackPrefix(t *testing.T) {
-	searcher := &stubSongSearcher{
-		results: map[string][]*navidrome.RemoteSong{
-			"Track Title Track Artist Track Album": {
-				{ID: "match", Path: "artist/album/01-03 - track.mp3", UserRating: 4},
-			},
-		},
-	}
-
-	localFiles := []*LocalFile{{
-		RelPath:   "artist/album/1-03 - track.mp3",
-		LocalFile: &tag.LocalFile{Title: "Track Title", Artist: "Track Artist", Album: "Track Album"},
-	}}
-
-	report, err := matchLocalToRemote(context.Background(), localFiles, searcher, "", testLogger())
-	if err != nil {
-		t.Fatalf("matchLocalToRemote() error = %v", err)
-	}
-	if len(report.matches) != 1 {
-		t.Fatalf("len(report.matches) = %d, want 1", len(report.matches))
-	}
-	if report.matches[0].method != "path_canonical" {
-		t.Fatalf("report.matches[0].method = %q, want %q", report.matches[0].method, "path_canonical")
-	}
-}
-
-func TestMatchLocalToRemote_CanonicalizesMissingDashAfterTrackNumber(t *testing.T) {
-	searcher := &stubSongSearcher{
-		results: map[string][]*navidrome.RemoteSong{
-			"E L E K T R O Jensen Interceptor The Ultimate Wave Riding Vehicle": {
-				{ID: "match", Path: "Jensen Interceptor/The Ultimate Wave Riding Vehicle/03 - E L E K T R O.mp3", UserRating: 4},
-			},
-		},
-	}
-
-	localFiles := []*LocalFile{{
-		RelPath: "Jensen Interceptor/The Ultimate Wave Riding Vehicle/03 E L E K T R O.mp3",
-		LocalFile: &tag.LocalFile{
-			Title:  "E L E K T R O",
-			Artist: "Jensen Interceptor",
-			Album:  "The Ultimate Wave Riding Vehicle",
-		},
-	}}
-
-	report, err := matchLocalToRemote(context.Background(), localFiles, searcher, "", testLogger())
-	if err != nil {
-		t.Fatalf("matchLocalToRemote() error = %v", err)
-	}
-	if len(report.matches) != 1 {
-		t.Fatalf("len(report.matches) = %d, want 1", len(report.matches))
-	}
-	if report.matches[0].method != "path_canonical" {
-		t.Fatalf("report.matches[0].method = %q, want %q", report.matches[0].method, "path_canonical")
-	}
-}
-
-func TestMatchLocalToRemote_CanonicalizesNNTitleToDoublePrefixDashTitle(t *testing.T) {
-	searcher := &stubSongSearcher{
-		results: map[string][]*navidrome.RemoteSong{
-			"Kaz Blawan Bohla EP": {
-				{ID: "match", Path: "Blawan/Bohla EP/01-02 - Kaz.mp3", UserRating: 4},
-			},
-		},
-	}
-
-	localFiles := []*LocalFile{{
-		RelPath:   "Blawan/Bohla EP/02 Kaz.mp3",
-		LocalFile: &tag.LocalFile{Title: "Kaz", Artist: "Blawan", Album: "Bohla EP"},
-	}}
-
-	report, err := matchLocalToRemote(context.Background(), localFiles, searcher, "", testLogger())
-	if err != nil {
-		t.Fatalf("matchLocalToRemote() error = %v", err)
-	}
-	if len(report.matches) != 1 {
-		t.Fatalf("len(report.matches) = %d, want 1", len(report.matches))
-	}
-	if report.matches[0].method != "path_canonical" {
-		t.Fatalf("report.matches[0].method = %q, want %q", report.matches[0].method, "path_canonical")
-	}
-}
-
-func TestMatchLocalToRemote_CanonicalizesNNTitleToDashTitle(t *testing.T) {
-	searcher := &stubSongSearcher{
-		results: map[string][]*navidrome.RemoteSong{
-			"Peaches [Coronation] Blawan Peaches": {
-				{ID: "match", Path: "Blawan/Peaches/01 - Peaches [Coronation].mp3", UserRating: 4},
-			},
-		},
-	}
-
-	localFiles := []*LocalFile{{
-		RelPath:   "Blawan/Peaches/01 Peaches [Coronation].mp3",
-		LocalFile: &tag.LocalFile{Title: "Peaches [Coronation]", Artist: "Blawan", Album: "Peaches"},
-	}}
-
-	report, err := matchLocalToRemote(context.Background(), localFiles, searcher, "", testLogger())
-	if err != nil {
-		t.Fatalf("matchLocalToRemote() error = %v", err)
-	}
-	if len(report.matches) != 1 {
-		t.Fatalf("len(report.matches) = %d, want 1", len(report.matches))
-	}
-	if report.matches[0].method != "path_canonical" {
-		t.Fatalf("report.matches[0].method = %q, want %q", report.matches[0].method, "path_canonical")
-	}
-}
-
 func TestMatchLocalToRemote_UsesSuffixPathFallback(t *testing.T) {
 	searcher := &stubSongSearcher{
 		results: map[string][]*navidrome.RemoteSong{
@@ -497,6 +397,62 @@ func TestSearchQuery_UsesTrackMetadata(t *testing.T) {
 
 	if got, want := searchQuery(localFile), "Track Title Track Artist Track Album"; got != want {
 		t.Fatalf("searchQuery() = %q, want %q", got, want)
+	}
+}
+
+func TestSearchQuery_UsesPathMetadataWhenTagsAreMissing(t *testing.T) {
+	localFile := &LocalFile{
+		RelPath:   "Chaos In The CBD/Never Again EP/03 Mariana Trench (Original Mix).mp3",
+		LocalFile: &tag.LocalFile{},
+	}
+
+	if got, want := searchQuery(localFile), "Mariana Trench (Original Mix) Chaos In The CBD Never Again EP"; got != want {
+		t.Fatalf("searchQuery() = %q, want %q", got, want)
+	}
+}
+
+func TestSearchQueries_StripsTrackPrefixAndFallsBackToTitleOnly(t *testing.T) {
+	localFile := &LocalFile{
+		RelPath:   "Steve Moore/Positronic Neural Pathways/01 Positronic Neural Pathways.mp3",
+		LocalFile: &tag.LocalFile{},
+	}
+
+	if got, want := searchQueries(localFile), []string{
+		"Positronic Neural Pathways Steve Moore Positronic Neural Pathways",
+		"Positronic Neural Pathways Steve Moore",
+		"Positronic Neural Pathways",
+	}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("searchQueries() = %v, want %v", got, want)
+	}
+}
+
+func TestMatchLocalToRemote_TriesLessSpecificQueriesWhenFirstSearchMisses(t *testing.T) {
+	searcher := &stubSongSearcher{
+		results: map[string][]*navidrome.RemoteSong{
+			"Brænder": {
+				{ID: "match", Path: "C.K/Accelerer/02 Brænder.mp3", UserRating: 4},
+			},
+		},
+	}
+
+	localFiles := []*LocalFile{{
+		RelPath:   "C.K/Accelerer/02 Brænder.mp3",
+		LocalFile: &tag.LocalFile{Title: "Brænder", Artist: "C.K", Album: "Accelerer"},
+	}}
+
+	report, err := matchLocalToRemote(context.Background(), localFiles, searcher, "", testLogger())
+	if err != nil {
+		t.Fatalf("matchLocalToRemote() error = %v", err)
+	}
+	if len(report.matches) != 1 {
+		t.Fatalf("len(report.matches) = %d, want 1", len(report.matches))
+	}
+	if got, want := searcher.queries, []string{
+		"Brænder C.K Accelerer",
+		"Brænder C.K",
+		"Brænder",
+	}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("queries = %v, want %v", got, want)
 	}
 }
 
