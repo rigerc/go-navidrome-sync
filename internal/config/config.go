@@ -19,8 +19,9 @@ type Config struct {
 		TLSSkipVerify bool   `koanf:"tlsskipverify"`
 	} `koanf:"navidrome"`
 	Sync struct {
-		MusicPath string `koanf:"musicpath"`
-		Prefer    string `koanf:"prefer"`
+		MusicPath        string `koanf:"musicpath"`
+		Prefer           string `koanf:"prefer"`
+		RemotePathPrefix string `koanf:"remotepathprefix"`
 	} `koanf:"sync"`
 }
 

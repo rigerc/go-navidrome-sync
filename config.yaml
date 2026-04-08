@@ -1,4 +1,4 @@
-loglevel: info
+loglevel: debug
 
 navidrome:
   baseurl: "https://music.bsgb.nl:443"
@@ -9,3 +9,4 @@ navidrome:
 sync:
   musicpath: "/mnt/extra-ssd/dev/projects/go-navidrome-ratings-sync/testdata/"
   prefer: "local"
+  remotepathprefix: "/share/Music"

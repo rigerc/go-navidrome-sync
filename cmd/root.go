@@ -1,10 +1,10 @@
 package cmd
 
 import (
-	"log/slog"
 	"os"
 	"strings"
 
+	"github.com/charmbracelet/log"
 	"github.com/rigerc/go-navidrome-ratings-sync/internal/config"
 	"github.com/spf13/cobra"
 )
@@ -21,20 +21,25 @@ var rootCmd = &cobra.Command{
 			return err
 		}
 
-		var level slog.Level
+		var level log.Level
 		switch strings.ToLower(cfg.LogLevel) {
 		case "debug":
-			level = slog.LevelDebug
+			level = log.DebugLevel
 		case "warn":
-			level = slog.LevelWarn
+			level = log.WarnLevel
 		case "error":
-			level = slog.LevelError
+			level = log.ErrorLevel
 		default:
-			level = slog.LevelInfo
+			level = log.InfoLevel
 		}
 
-		logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level}))
-		slog.SetDefault(logger)
+		logger := log.NewWithOptions(os.Stderr, log.Options{
+			Level:           level,
+			Formatter:       log.TextFormatter,
+			ReportTimestamp: true,
+			TimeFormat:      "15:04:05",
+		})
+		log.SetDefault(logger)
 
 		cmd.SetContext(config.WithContext(cmd.Context(), cfg))
 		return nil

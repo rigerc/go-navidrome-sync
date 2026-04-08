@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/mewkiz/flac"
@@ -12,11 +13,11 @@ import (
 )
 
 func ReadRating(filePath string) (int, error) {
-	ext := strings.ToLower(filePath[len(filePath)-4:])
+	ext := strings.ToLower(filepath.Ext(filePath))
 	switch ext {
 	case ".mp3":
 		return ReadPOPMRating(filePath)
-	case "flac":
+	case ".flac":
 		return readFlacRating(filePath)
 	default:
 		return 0, nil
@@ -32,11 +33,11 @@ func readFlacRating(filePath string) (int, error) {
 }
 
 func WriteRating(filePath string, rating int) error {
-	ext := strings.ToLower(filePath[len(filePath)-4:])
+	ext := strings.ToLower(filepath.Ext(filePath))
 	switch ext {
 	case ".mp3":
 		return WritePOPMRating(filePath, rating)
-	case "flac":
+	case ".flac":
 		return WriteFlacRating(filePath, rating)
 	default:
 		return fmt.Errorf("unsupported file format: %s", ext)
@@ -53,11 +54,11 @@ type LocalFile struct {
 }
 
 func ReadLocalFile(filePath string) (*LocalFile, error) {
-	ext := strings.ToLower(filePath[len(filePath)-4:])
+	ext := strings.ToLower(filepath.Ext(filePath))
 	switch ext {
 	case ".mp3":
 		return readMP3File(filePath)
-	case "flac":
+	case ".flac":
 		return readFlacFile(filePath)
 	default:
 		return &LocalFile{}, nil
@@ -123,6 +124,9 @@ func WriteFlacRating(filePath string, rating int) error {
 	data, err := os.ReadFile(filePath)
 	if err != nil {
 		return fmt.Errorf("failed to read %s: %w", filePath, err)
+	}
+	if len(data) < 4 {
+		return fmt.Errorf("not a valid FLAC file: %s", filePath)
 	}
 
 	if !bytes.Equal(data[:4], []byte("fLaC")) {

@@ -2,9 +2,8 @@ package cmd
 
 import (
 	"fmt"
-	"log/slog"
-	"strings"
 
+	"github.com/charmbracelet/log"
 	"github.com/rigerc/go-navidrome-ratings-sync/internal/config"
 	"github.com/rigerc/go-navidrome-ratings-sync/internal/navidrome"
 	"github.com/rigerc/go-navidrome-ratings-sync/internal/sync"
@@ -12,12 +11,13 @@ import (
 )
 
 var (
-	dryRun      bool
-	preferFlag  string
-	userFlag    string
-	passFlag    string
-	baseURLFlag string
-	tlsSkipFlag bool
+	dryRun           bool
+	preferFlag       string
+	userFlag         string
+	passFlag         string
+	baseURLFlag      string
+	remotePathPrefix string
+	tlsSkipFlag      bool
 )
 
 var syncCmd = &cobra.Command{
@@ -27,7 +27,7 @@ var syncCmd = &cobra.Command{
 	Args:  cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cfg := config.FromContext(cmd.Context())
-		log := slog.Default()
+		logger := log.Default()
 
 		musicPath := cfg.Sync.MusicPath
 		if len(args) > 0 {
@@ -54,63 +54,43 @@ var syncCmd = &cobra.Command{
 		if preferFlag != "" {
 			prefer = preferFlag
 		}
+		if remotePathPrefix != "" {
+			cfg.Sync.RemotePathPrefix = remotePathPrefix
+		}
 
 		if prefer != "local" && prefer != "navidrome" {
 			return cmd.Help()
 		}
 
-		log.Debug("Starting sync",
+		logger.Debug("Starting sync",
 			"music_path", musicPath,
 			"navidrome", cfg.Navidrome.BaseURL,
 			"prefer", prefer,
+			"remote_path_prefix", cfg.Sync.RemotePathPrefix,
 			"dry_run", dryRun,
 		)
 
-		localFiles, err := sync.ScanLocalFiles(musicPath, log)
+		localFiles, err := sync.ScanLocalFiles(musicPath, logger)
 		if err != nil {
 			return err
 		}
 
 		if len(localFiles) == 0 {
-			log.Info("No music files found in music path", "path", musicPath)
+			logger.Info("No music files found in music path", "path", musicPath)
 			return nil
 		}
 
-		artistNames := make(map[string]bool)
-		for _, lf := range localFiles {
-			if lf.Artist != "" {
-				artistNames[lf.Artist] = true
-			} else {
-				parts := strings.SplitN(lf.RelPath, "/", 2)
-				if len(parts) >= 1 {
-					artistNames[parts[0]] = true
-				}
-			}
-		}
-
-		client, err := navidrome.Connect(cfg, log)
+		client, err := navidrome.Connect(cfg, logger)
 		if err != nil {
 			return err
 		}
 
-		remoteSongs, err := client.FetchSongsForArtists(artistNames)
+		results, err := sync.Run(musicPath, localFiles, client, cfg.Sync.RemotePathPrefix, prefer, dryRun, logger)
 		if err != nil {
 			return err
 		}
 
-		if len(remoteSongs) == 0 {
-			log.Warn("No songs found on Navidrome for local artists")
-			return nil
-		}
-
-		log.Info("Fetched songs", "local", len(localFiles), "remote", len(remoteSongs))
-
-		results, err := sync.Run(musicPath, localFiles, remoteSongs, prefer, dryRun, log)
-		if err != nil {
-			return err
-		}
-
-		return sync.ApplyResults(musicPath, results, client, dryRun, log)
+		return sync.ApplyResults(musicPath, results, client, dryRun, logger)
 	},
 }
 
@@ -122,5 +102,6 @@ func init() {
 	syncCmd.Flags().StringVar(&userFlag, "user", "", "Navidrome username (overrides config)")
 	syncCmd.Flags().StringVar(&passFlag, "password", "", "Navidrome password (overrides config)")
 	syncCmd.Flags().StringVar(&baseURLFlag, "baseurl", "", "Navidrome base URL (overrides config)")
+	syncCmd.Flags().StringVar(&remotePathPrefix, "remote-path-prefix", "", "strip this prefix from Navidrome song paths before matching")
 	syncCmd.Flags().BoolVar(&tlsSkipFlag, "tls-skip-verify", false, "skip TLS certificate verification (overrides config)")
 }
