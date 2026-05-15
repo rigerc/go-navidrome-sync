@@ -20,6 +20,17 @@ import (
 	"github.com/rigerc/go-navidrome-ratings-sync/internal/tag"
 )
 
+func parseRemotePlayed(s string) *time.Time {
+	if s == "" {
+		return nil
+	}
+	t, err := time.Parse(time.RFC3339, s)
+	if err != nil {
+		return nil
+	}
+	return &t
+}
+
 type Action int
 
 const (
@@ -40,12 +51,18 @@ func (a Action) String() string {
 }
 
 type Result struct {
-	Action    Action
-	Path      string
-	OldLocal  int
-	OldRemote int
-	NewRating int
-	RemoteID  string
+	Action             Action
+	Path               string
+	OldLocal           int
+	OldRemote          int
+	NewRating          int
+	RemoteID           string
+	PlayStatsAction    Action
+	OldLocalPlayed     *time.Time
+	OldRemotePlayed    *time.Time
+	OldRemotePlayCount int64
+	NewPlayCount       int64
+	NewPlayed          *time.Time
 }
 
 type LocalFile struct {
@@ -337,60 +354,77 @@ func Run(
 			log.Info(formatMatchedDryRunMessage(m, localRating, remoteRating))
 		}
 
-		if localRating == 0 && remoteRating == 0 {
-			skipped++
-			results = append(results, Result{Action: ActionSkip, Path: m.local.RelPath})
-			continue
+		// --- rating action ---
+		var ratingAction Action
+		var newRating int
+		switch {
+		case localRating == 0 && remoteRating == 0:
+			ratingAction = ActionSkip
+		case localRating == remoteRating:
+			ratingAction = ActionSkip
+		case localRating > 0 && remoteRating == 0:
+			ratingAction = ActionPush
+			newRating = localRating
+		case remoteRating > 0 && localRating == 0:
+			ratingAction = ActionPull
+			newRating = remoteRating
+		default:
+			conflicts++
+			if prefer == "local" {
+				ratingAction = ActionPush
+				newRating = localRating
+			} else {
+				ratingAction = ActionPull
+				newRating = remoteRating
+			}
 		}
-
-		if localRating == remoteRating {
-			skipped++
-			results = append(results, Result{Action: ActionSkip, Path: m.local.RelPath})
-			continue
-		}
-
-		if localRating > 0 && remoteRating == 0 {
-			results = append(results, Result{
-				Action: ActionPush, Path: m.local.RelPath,
-				OldLocal: localRating, OldRemote: remoteRating, NewRating: localRating,
-				RemoteID: m.remote.ID,
-			})
+		switch ratingAction {
+		case ActionPush:
 			pushed++
-			continue
-		}
-
-		if remoteRating > 0 && localRating == 0 {
-			results = append(results, Result{
-				Action: ActionPull, Path: m.local.RelPath,
-				OldLocal: localRating, OldRemote: remoteRating, NewRating: remoteRating,
-				RemoteID: m.remote.ID,
-			})
+		case ActionPull:
 			pulled++
-			continue
+		default:
+			skipped++
 		}
 
-		conflicts++
-		var chosenRating int
-		var action Action
-		if prefer == "local" {
-			chosenRating = localRating
-			action = ActionPush
-		} else {
-			chosenRating = remoteRating
-			action = ActionPull
+		// --- play-stats action (take max play count and most recent last played) ---
+		localPlayed := m.local.Played
+		remotePlayed := parseRemotePlayed(m.remote.Played)
+		localMore := m.local.PlayCount > m.remote.PlayCount ||
+			(localPlayed != nil && (remotePlayed == nil || localPlayed.After(*remotePlayed)))
+		remoteMore := m.remote.PlayCount > m.local.PlayCount ||
+			(remotePlayed != nil && (localPlayed == nil || remotePlayed.After(*localPlayed)))
+
+		var playStatsAction Action
+		var newPlayCount int64
+		var newPlayed *time.Time
+		switch {
+		case localMore:
+			playStatsAction = ActionPush
+			newPlayCount = m.local.PlayCount
+			newPlayed = localPlayed
+		case remoteMore:
+			playStatsAction = ActionPull
+			newPlayCount = m.remote.PlayCount
+			newPlayed = remotePlayed
+		default:
+			playStatsAction = ActionSkip
 		}
 
 		results = append(results, Result{
-			Action: action, Path: m.local.RelPath,
-			OldLocal: localRating, OldRemote: remoteRating, NewRating: chosenRating,
-			RemoteID: m.remote.ID,
+			Action:             ratingAction,
+			Path:               m.local.RelPath,
+			OldLocal:           localRating,
+			OldRemote:          remoteRating,
+			NewRating:          newRating,
+			RemoteID:           m.remote.ID,
+			PlayStatsAction:    playStatsAction,
+			OldLocalPlayed:     localPlayed,
+			OldRemotePlayed:    remotePlayed,
+			OldRemotePlayCount: m.remote.PlayCount,
+			NewPlayCount:       newPlayCount,
+			NewPlayed:          newPlayed,
 		})
-
-		if action == ActionPush {
-			pushed++
-		} else {
-			pulled++
-		}
 	}
 
 	for _, item := range report.unmatched {
@@ -1315,6 +1349,9 @@ func ApplyResults(
 		if result.Action != ActionSkip {
 			totalActions++
 		}
+		if result.PlayStatsAction != ActionSkip {
+			totalActions++
+		}
 	}
 	if progress.Enabled() {
 		progress.StartApplying(totalActions, dryRun)
@@ -1323,11 +1360,16 @@ func ApplyResults(
 	pushed := 0
 	pulled := 0
 
-	for _, r := range results {
-		switch r.Action {
-		case ActionSkip:
-			continue
+	recordErr := func(err error) {
+		failures++
+		if firstErr == nil {
+			firstErr = err
+		}
+	}
 
+	for _, r := range results {
+		// --- rating ---
+		switch r.Action {
 		case ActionPush:
 			if dryRun {
 				if !progress.Enabled() {
@@ -1339,21 +1381,18 @@ func ApplyResults(
 				if err := client.SetRating(ctx, r.RemoteID, r.NewRating); err != nil {
 					log.Error("Failed to push rating",
 						"path", r.Path, "rating", r.NewRating, "error", err)
-					failures++
-					if firstErr == nil {
-						firstErr = err
+					recordErr(err)
+				} else {
+					if !progress.Enabled() {
+						log.Info("Pushed rating to Navidrome",
+							"path", r.Path, "rating", r.NewRating)
 					}
-					processedActions++
-					if progress.Enabled() {
-						progress.UpdateApplying(processedActions, totalActions, pushed, pulled, failures, dryRun)
-					}
-					continue
+					pushed++
 				}
-				if !progress.Enabled() {
-					log.Info("Pushed rating to Navidrome",
-						"path", r.Path, "rating", r.NewRating)
-				}
-				pushed++
+			}
+			processedActions++
+			if progress.Enabled() {
+				progress.UpdateApplying(processedActions, totalActions, pushed, pulled, failures, dryRun)
 			}
 
 		case ActionPull:
@@ -1368,27 +1407,81 @@ func ApplyResults(
 				if err := tag.WriteRating(fullPath, r.NewRating); err != nil {
 					log.Error("Failed to write rating",
 						"path", r.Path, "rating", r.NewRating, "error", err)
-					failures++
-					if firstErr == nil {
-						firstErr = err
+					recordErr(err)
+				} else {
+					if !progress.Enabled() {
+						log.Info("Wrote rating to local file",
+							"path", r.Path, "rating", r.NewRating)
 					}
-					processedActions++
-					if progress.Enabled() {
-						progress.UpdateApplying(processedActions, totalActions, pushed, pulled, failures, dryRun)
-					}
-					continue
+					pulled++
 				}
-				if !progress.Enabled() {
-					log.Info("Wrote rating to local file",
-						"path", r.Path, "rating", r.NewRating)
-				}
-				pulled++
+			}
+			processedActions++
+			if progress.Enabled() {
+				progress.UpdateApplying(processedActions, totalActions, pushed, pulled, failures, dryRun)
 			}
 		}
 
-		processedActions++
-		if progress.Enabled() {
-			progress.UpdateApplying(processedActions, totalActions, pushed, pulled, failures, dryRun)
+		// --- play stats ---
+		switch r.PlayStatsAction {
+		case ActionPush:
+			if r.NewPlayed == nil {
+				break
+			}
+			delta := r.NewPlayCount - r.OldRemotePlayCount
+			scrobbleCount := int(delta)
+			if scrobbleCount <= 0 {
+				scrobbleCount = 1
+			}
+			if dryRun {
+				if !progress.Enabled() {
+					log.Info("[DRY-RUN] Would push play stats to Navidrome",
+						"path", r.Path, "play_count", r.NewPlayCount, "played", r.NewPlayed, "scrobbles", scrobbleCount)
+				}
+				pushed++
+			} else {
+				if err := client.Scrobble(ctx, r.RemoteID, scrobbleCount, *r.NewPlayed); err != nil {
+					log.Error("Failed to push play stats",
+						"path", r.Path, "play_count", r.NewPlayCount, "error", err)
+					recordErr(err)
+				} else {
+					if !progress.Enabled() {
+						log.Info("Pushed play stats to Navidrome",
+							"path", r.Path, "play_count", r.NewPlayCount, "played", r.NewPlayed)
+					}
+					pushed++
+				}
+			}
+			processedActions++
+			if progress.Enabled() {
+				progress.UpdateApplying(processedActions, totalActions, pushed, pulled, failures, dryRun)
+			}
+
+		case ActionPull:
+			fullPath := filepath.Join(musicPath, r.Path)
+			if dryRun {
+				if !progress.Enabled() {
+					log.Info("[DRY-RUN] Would write play stats to local file",
+						"path", r.Path, "play_count", r.NewPlayCount, "played", r.NewPlayed)
+				}
+				pulled++
+			} else {
+				if err := tag.WritePlayStats(fullPath, r.NewPlayCount, r.NewPlayed); err != nil {
+					log.Error("Failed to write play stats",
+						"path", r.Path, "play_count", r.NewPlayCount, "error", err)
+					recordErr(err)
+				} else {
+					if !progress.Enabled() {
+						log.Info("Wrote play stats to local file",
+							"path", r.Path, "play_count", r.NewPlayCount, "played", r.NewPlayed)
+					}
+					pulled++
+				}
+			}
+			processedActions++
+			if progress.Enabled() {
+				progress.UpdateApplying(processedActions, totalActions, pushed, pulled, failures, dryRun)
+			}
 		}
 	}
 

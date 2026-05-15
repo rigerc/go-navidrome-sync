@@ -7,7 +7,7 @@ navidrome:
   tlsskipverify: false
 
 sync:
-  musicpath: "/mnt/bsgb-nas/Muziek/Music/"
+  musicpath: "testdata/"
   prefer: "local"
   remotepathprefix: "/share/Music"
   searchinterval: "100ms"

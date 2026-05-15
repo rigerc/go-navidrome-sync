@@ -3,7 +3,9 @@ package tag
 import (
 	"fmt"
 	"math/big"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/bogem/id3v2"
 )
@@ -70,6 +72,43 @@ func WritePOPMRating(filePath string, rating int) error {
 	return nil
 }
 
+func WriteMP3PlayStats(filePath string, playCount int64, played *time.Time) error {
+	tag, err := id3v2.Open(filePath, id3v2.Options{Parse: true})
+	if err != nil {
+		return fmt.Errorf("failed to open %s: %w", filePath, err)
+	}
+	defer tag.Close()
+
+	existing := tag.GetFrames(tag.CommonID("TXXX"))
+	tag.DeleteFrames(tag.CommonID("TXXX"))
+	for _, f := range existing {
+		if fr, ok := f.(id3v2.UserDefinedTextFrame); ok {
+			if strings.EqualFold(fr.Description, "PLAY_COUNT") || strings.EqualFold(fr.Description, "LAST_PLAYED") {
+				continue
+			}
+		}
+		tag.AddFrame(tag.CommonID("TXXX"), f)
+	}
+
+	if playCount > 0 {
+		tag.AddFrame(tag.CommonID("TXXX"), id3v2.UserDefinedTextFrame{
+			Description: "PLAY_COUNT",
+			Value:       strconv.FormatInt(playCount, 10),
+		})
+	}
+	if played != nil {
+		tag.AddFrame(tag.CommonID("TXXX"), id3v2.UserDefinedTextFrame{
+			Description: "LAST_PLAYED",
+			Value:       played.UTC().Format(time.RFC3339),
+		})
+	}
+
+	if err := tag.Save(); err != nil {
+		return fmt.Errorf("failed to save %s: %w", filePath, err)
+	}
+	return nil
+}
+
 func readMP3File(filePath string) (*LocalFile, error) {
 	tag, err := id3v2.Open(filePath, id3v2.Options{Parse: true})
 	if err != nil {
@@ -95,6 +134,16 @@ func readMP3File(filePath string) (*LocalFile, error) {
 				}
 				if strings.EqualFold(fr.Description, "ISRC") {
 					lf.ISRC = fr.Value
+				}
+				if strings.EqualFold(fr.Description, "PLAY_COUNT") {
+					if n, err := strconv.ParseInt(fr.Value, 10, 64); err == nil && n > 0 {
+						lf.PlayCount = n
+					}
+				}
+				if strings.EqualFold(fr.Description, "LAST_PLAYED") {
+					if t, err := time.Parse(time.RFC3339, fr.Value); err == nil {
+						lf.Played = &t
+					}
 				}
 			case id3v2.UnsynchronisedLyricsFrame:
 				// UFID stores MusicBrainz ID with owner identifier

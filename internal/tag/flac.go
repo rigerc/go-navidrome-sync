@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/mewkiz/flac"
 	"github.com/mewkiz/flac/meta"
@@ -46,6 +48,8 @@ func WriteRating(filePath string, rating int) error {
 
 type LocalFile struct {
 	Rating        int
+	PlayCount     int64
+	Played        *time.Time
 	MusicBrainzID string
 	ISRC          string
 	Artist        string
@@ -96,6 +100,14 @@ func readFlacFile(filePath string) (*LocalFile, error) {
 						lf.Rating = r
 					}
 				}
+			case "PLAY_COUNT":
+				if n, err := strconv.ParseInt(tag[1], 10, 64); err == nil && n > 0 {
+					lf.PlayCount = n
+				}
+			case "LAST_PLAYED":
+				if t, err := time.Parse(time.RFC3339, tag[1]); err == nil {
+					lf.Played = &t
+				}
 			case "MUSICBRAINZ_TRACKID":
 				lf.MusicBrainzID = tag[1]
 			case "ISRC":
@@ -118,6 +130,157 @@ func readFlacFile(filePath string) (*LocalFile, error) {
 type rawBlock struct {
 	header [4]byte
 	body   []byte
+}
+
+func WritePlayStats(filePath string, playCount int64, played *time.Time) error {
+	ext := strings.ToLower(filepath.Ext(filePath))
+	switch ext {
+	case ".mp3":
+		return WriteMP3PlayStats(filePath, playCount, played)
+	case ".flac":
+		return WriteFlacPlayStats(filePath, playCount, played)
+	default:
+		return fmt.Errorf("unsupported file format: %s", ext)
+	}
+}
+
+func WriteFlacPlayStats(filePath string, playCount int64, played *time.Time) error {
+	info, err := os.Stat(filePath)
+	if err != nil {
+		return fmt.Errorf("failed to stat %s: %w", filePath, err)
+	}
+
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		return fmt.Errorf("failed to read %s: %w", filePath, err)
+	}
+	if len(data) < 4 {
+		return fmt.Errorf("not a valid FLAC file: %s", filePath)
+	}
+	if !bytes.Equal(data[:4], []byte("fLaC")) {
+		return fmt.Errorf("not a valid FLAC file: %s", filePath)
+	}
+
+	var blocks []rawBlock
+	offset := 4
+	for offset < len(data) {
+		if offset+4 > len(data) {
+			return fmt.Errorf("truncated metadata header at offset %d", offset)
+		}
+		hdr := [4]byte{data[offset], data[offset+1], data[offset+2], data[offset+3]}
+		isLast := hdr[0]&0x80 != 0
+		_ = meta.Type(hdr[0] & 0x7F)
+		length := int(hdr[1])<<16 | int(hdr[2])<<8 | int(hdr[3])
+		bodyEnd := offset + 4 + length
+		if bodyEnd > len(data) {
+			return fmt.Errorf("metadata block body overflows file at offset %d", offset)
+		}
+		body := make([]byte, length)
+		copy(body, data[offset+4:bodyEnd])
+		blocks = append(blocks, rawBlock{header: hdr, body: body})
+		offset = bodyEnd
+		if isLast {
+			break
+		}
+	}
+
+	audioData := data[offset:]
+
+	vcIdx := -1
+	for i, b := range blocks {
+		if meta.Type(b.header[0]&0x7F) == meta.TypeVorbisComment {
+			vcIdx = i
+			break
+		}
+	}
+
+	var newVcBody []byte
+	if vcIdx >= 0 {
+		vc, err := parseVorbisCommentBody(blocks[vcIdx].body)
+		if err != nil {
+			return fmt.Errorf("failed to parse existing VorbisComment: %w", err)
+		}
+		setVorbisCommentPlayStats(vc, playCount, played)
+		newVcBody, err = encodeVorbisCommentBody(vc)
+		if err != nil {
+			return fmt.Errorf("failed to encode VorbisComment: %w", err)
+		}
+	} else {
+		vc := &meta.VorbisComment{
+			Vendor: "go-navidrome-ratings-sync",
+		}
+		setVorbisCommentPlayStats(vc, playCount, played)
+		newVcBody, err = encodeVorbisCommentBody(vc)
+		if err != nil {
+			return fmt.Errorf("failed to encode VorbisComment: %w", err)
+		}
+	}
+
+	var buf bytes.Buffer
+	buf.Write([]byte("fLaC"))
+	for i, b := range blocks {
+		isLast := i == len(blocks)-1
+		if i == vcIdx {
+			hdr := b.header
+			if isLast {
+				hdr[0] |= 0x80
+			} else {
+				hdr[0] &^= 0x80
+			}
+			hdr[1] = byte(len(newVcBody) >> 16)
+			hdr[2] = byte(len(newVcBody) >> 8)
+			hdr[3] = byte(len(newVcBody))
+			buf.Write(hdr[:])
+			buf.Write(newVcBody)
+		} else {
+			if isLast {
+				b.header[0] |= 0x80
+			}
+			buf.Write(b.header[:])
+			buf.Write(b.body)
+		}
+	}
+	if vcIdx < 0 {
+		hdr := [4]byte{byte(meta.TypeVorbisComment) | 0x80}
+		hdr[1] = byte(len(newVcBody) >> 16)
+		hdr[2] = byte(len(newVcBody) >> 8)
+		hdr[3] = byte(len(newVcBody))
+		buf.Write(hdr[:])
+		buf.Write(newVcBody)
+	}
+	buf.Write(audioData)
+
+	output := buf.Bytes()
+	if vcIdx < 0 && len(blocks) > 0 {
+		lastHeaderOffset := 4
+		for i := 0; i < len(blocks)-1; i++ {
+			lastHeaderOffset += 4 + len(blocks[i].body)
+		}
+		output[lastHeaderOffset] &^= 0x80
+	}
+
+	if err := os.WriteFile(filePath, output, info.Mode()); err != nil {
+		return fmt.Errorf("failed to write %s: %w", filePath, err)
+	}
+	return nil
+}
+
+func setVorbisCommentPlayStats(vc *meta.VorbisComment, playCount int64, played *time.Time) {
+	setTag := func(key, value string) {
+		for i, tag := range vc.Tags {
+			if strings.ToUpper(tag[0]) == key {
+				vc.Tags[i][1] = value
+				return
+			}
+		}
+		vc.Tags = append(vc.Tags, [2]string{key, value})
+	}
+	if playCount > 0 {
+		setTag("PLAY_COUNT", strconv.FormatInt(playCount, 10))
+	}
+	if played != nil {
+		setTag("LAST_PLAYED", played.UTC().Format(time.RFC3339))
+	}
 }
 
 func WriteFlacRating(filePath string, rating int) error {

@@ -34,6 +34,8 @@ type nativeSong struct {
 	ID             string `json:"id"`
 	Path           string `json:"path"`
 	Rating         int    `json:"rating"`
+	PlayCount      int64  `json:"playCount"`
+	PlayDate       string `json:"playDate"`
 	MbzRecordingID string `json:"mbzRecordingID"`
 	Artist         string `json:"artist"`
 	Album          string `json:"album"`
@@ -94,6 +96,8 @@ func (c *nativeSearchClient) SearchSongsByTitle(ctx context.Context, title strin
 			ID:            song.ID,
 			Path:          song.Path,
 			UserRating:    song.Rating,
+			PlayCount:     song.PlayCount,
+			Played:        song.PlayDate,
 			MusicBrainzID: song.MbzRecordingID,
 			Artist:        song.Artist,
 			Album:         song.Album,

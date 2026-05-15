@@ -22,6 +22,8 @@ type RemoteSong struct {
 	ID            string
 	Path          string
 	UserRating    int
+	PlayCount     int64
+	Played        string
 	MusicBrainzID string
 	Artist        string
 	Album         string
@@ -32,6 +34,8 @@ type Song struct {
 	Path          string `json:"path,omitempty"`
 	IsDir         bool   `json:"isDir,omitempty"`
 	UserRating    int    `json:"userRating,omitempty"`
+	PlayCount     int64  `json:"playCount,omitempty"`
+	Played        string `json:"played,omitempty"`
 	MusicBrainzID string `json:"musicBrainzId,omitempty"`
 	Artist        string `json:"artist,omitempty"`
 	Album         string `json:"album,omitempty"`
@@ -153,6 +157,22 @@ func (c *Client) SetRating(ctx context.Context, id string, rating int) error {
 	return nil
 }
 
+func (c *Client) Scrobble(ctx context.Context, id string, n int, playedAt time.Time) error {
+	for i := range n {
+		offset := time.Duration(n-1-i) * time.Minute
+		t := playedAt.Add(-offset)
+		_, err := c.do(ctx, "scrobble", map[string]string{
+			"id":         id,
+			"time":       strconv.FormatInt(t.UnixMilli(), 10),
+			"submission": "true",
+		})
+		if err != nil {
+			return fmt.Errorf("scrobbling %q (play %d/%d): %w", id, i+1, n, err)
+		}
+	}
+	return nil
+}
+
 func (c *Client) SearchSongsByTitle(ctx context.Context, title string, limit int) ([]*RemoteSong, error) {
 	if limit <= 0 {
 		return nil, nil
@@ -201,10 +221,18 @@ func (c *Client) SearchSongsByTitle(ctx context.Context, title string, limit int
 		if details != nil {
 			userRating = details.UserRating
 		}
+		playCount := int64(0)
+		played := ""
+		if details != nil {
+			playCount = details.PlayCount
+			played = details.Played
+		}
 		results = append(results, &RemoteSong{
 			ID:            song.ID,
 			Path:          song.Path,
 			UserRating:    userRating,
+			PlayCount:     playCount,
+			Played:        played,
 			MusicBrainzID: song.MusicBrainzID,
 			Artist:        song.Artist,
 			Album:         song.Album,
