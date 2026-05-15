@@ -14,6 +14,7 @@ import (
 
 	"github.com/charmbracelet/log"
 	"github.com/rigerc/go-navidrome-ratings-sync/internal/navidrome"
+	outputpkg "github.com/rigerc/go-navidrome-ratings-sync/internal/output"
 	"github.com/rigerc/go-navidrome-ratings-sync/internal/tag"
 )
 
@@ -41,9 +42,15 @@ func TestScanLocalFiles_SortsFiltersAndKeepsUnreadableFiles(t *testing.T) {
 		}
 	}
 
-	files, err := ScanLocalFiles(root, testLogger())
+	files, warnings, err := ScanLocalFiles(root, testLogger(), outputpkg.NoopProgress())
 	if err != nil {
 		t.Fatalf("ScanLocalFiles() error = %v", err)
+	}
+	if len(warnings) != 1 {
+		t.Fatalf("len(warnings) = %d, want 1", len(warnings))
+	}
+	if warnings[0].Stage != "scan_metadata" {
+		t.Fatalf("warnings[0].Stage = %q, want %q", warnings[0].Stage, "scan_metadata")
 	}
 
 	if len(files) != 2 {
@@ -95,7 +102,7 @@ func TestScanLocalFiles_UsesMultipleWorkers(t *testing.T) {
 		return &tag.LocalFile{Title: filepath.Base(path)}, nil
 	}
 
-	if _, err := ScanLocalFiles(root, testLogger()); err != nil {
+	if _, _, err := ScanLocalFiles(root, testLogger(), outputpkg.NoopProgress()); err != nil {
 		t.Fatalf("ScanLocalFiles() error = %v", err)
 	}
 
@@ -127,7 +134,7 @@ func TestMatchLocalToRemote_UsesTitleQueryAndPathMatch(t *testing.T) {
 		},
 	}
 
-	report, err := matchLocalToRemote(context.Background(), localFiles, searcher, "", 0, testLogger())
+	report, err := matchLocalToRemote(context.Background(), localFiles, searcher, "", 0, testLogger(), outputpkg.NoopProgress())
 	if err != nil {
 		t.Fatalf("matchLocalToRemote() error = %v", err)
 	}
@@ -167,7 +174,7 @@ func TestMatchLocalToRemote_FallsBackToFilenameTitle(t *testing.T) {
 		},
 	}
 
-	report, err := matchLocalToRemote(context.Background(), localFiles, searcher, "", 0, testLogger())
+	report, err := matchLocalToRemote(context.Background(), localFiles, searcher, "", 0, testLogger(), outputpkg.NoopProgress())
 	if err != nil {
 		t.Fatalf("matchLocalToRemote() error = %v", err)
 	}
@@ -205,7 +212,7 @@ func TestMatchLocalToRemote_DoesNotDeadlockWhenSearchesReturnImmediately(t *test
 	var report *matchReport
 	var err error
 	go func() {
-		report, err = matchLocalToRemote(context.Background(), localFiles, searcher, "", 0, testLogger())
+		report, err = matchLocalToRemote(context.Background(), localFiles, searcher, "", 0, testLogger(), outputpkg.NoopProgress())
 		close(done)
 	}()
 
@@ -240,7 +247,7 @@ func TestMatchLocalToRemote_StripsRemotePathPrefix(t *testing.T) {
 		LocalFile: &tag.LocalFile{Title: "Track Title", Artist: "Track Artist", Album: "Track Album"},
 	}}
 
-	report, err := matchLocalToRemote(context.Background(), localFiles, searcher, "music", 0, testLogger())
+	report, err := matchLocalToRemote(context.Background(), localFiles, searcher, "music", 0, testLogger(), outputpkg.NoopProgress())
 	if err != nil {
 		t.Fatalf("matchLocalToRemote() error = %v", err)
 	}
@@ -264,7 +271,7 @@ func TestMatchLocalToRemote_PrefersMusicBrainzIDOverPath(t *testing.T) {
 		LocalFile: &tag.LocalFile{Title: "Track Title", Artist: "Track Artist", Album: "Track Album", MusicBrainzID: "mbid-123"},
 	}}
 
-	report, err := matchLocalToRemote(context.Background(), localFiles, searcher, "", 0, testLogger())
+	report, err := matchLocalToRemote(context.Background(), localFiles, searcher, "", 0, testLogger(), outputpkg.NoopProgress())
 	if err != nil {
 		t.Fatalf("matchLocalToRemote() error = %v", err)
 	}
@@ -293,7 +300,7 @@ func TestMatchLocalToRemote_ReportsUnmatchedCandidates(t *testing.T) {
 		LocalFile: &tag.LocalFile{Title: "Track Title", Artist: "Track Artist", Album: "Track Album"},
 	}}
 
-	report, err := matchLocalToRemote(context.Background(), localFiles, searcher, "library", 0, testLogger())
+	report, err := matchLocalToRemote(context.Background(), localFiles, searcher, "library", 0, testLogger(), outputpkg.NoopProgress())
 	if err != nil {
 		t.Fatalf("matchLocalToRemote() error = %v", err)
 	}
@@ -335,7 +342,7 @@ func TestMatchLocalToRemote_UsesSuffixPathFallback(t *testing.T) {
 		},
 	}}
 
-	report, err := matchLocalToRemote(context.Background(), localFiles, searcher, "", 0, testLogger())
+	report, err := matchLocalToRemote(context.Background(), localFiles, searcher, "", 0, testLogger(), outputpkg.NoopProgress())
 	if err != nil {
 		t.Fatalf("matchLocalToRemote() error = %v", err)
 	}
@@ -365,7 +372,7 @@ func TestMatchLocalToRemote_DoesNotUseWeakSuffixPathFallback(t *testing.T) {
 		},
 	}}
 
-	report, err := matchLocalToRemote(context.Background(), localFiles, searcher, "", 0, testLogger())
+	report, err := matchLocalToRemote(context.Background(), localFiles, searcher, "", 0, testLogger(), outputpkg.NoopProgress())
 	if err != nil {
 		t.Fatalf("matchLocalToRemote() error = %v", err)
 	}
@@ -432,7 +439,7 @@ func TestMatchLocalToRemote_TriesLessSpecificQueriesWhenFirstSearchMisses(t *tes
 		LocalFile: &tag.LocalFile{Title: "Brænder", Artist: "C.K", Album: "Accelerer"},
 	}}
 
-	report, err := matchLocalToRemote(context.Background(), localFiles, searcher, "", 0, testLogger())
+	report, err := matchLocalToRemote(context.Background(), localFiles, searcher, "", 0, testLogger(), outputpkg.NoopProgress())
 	if err != nil {
 		t.Fatalf("matchLocalToRemote() error = %v", err)
 	}
@@ -462,7 +469,7 @@ func TestMatchLocalToRemote_UsesNativeFallbackWhenSubsonicFindsNoMatches(t *test
 		LocalFile: &tag.LocalFile{Title: "Track Title", Artist: "Artist", Album: "Album"},
 	}}
 
-	report, err := matchLocalToRemote(context.Background(), localFiles, searcher, "", 0, testLogger())
+	report, err := matchLocalToRemote(context.Background(), localFiles, searcher, "", 0, testLogger(), outputpkg.NoopProgress())
 	if err != nil {
 		t.Fatalf("matchLocalToRemote() error = %v", err)
 	}
@@ -496,7 +503,7 @@ func TestMatchLocalToRemote_DoesNotUseNativeFallbackWhenSubsonicReturnsCandidate
 		LocalFile: &tag.LocalFile{Title: "Track Title", Artist: "Artist", Album: "Album"},
 	}}
 
-	report, err := matchLocalToRemote(context.Background(), localFiles, searcher, "", 0, testLogger())
+	report, err := matchLocalToRemote(context.Background(), localFiles, searcher, "", 0, testLogger(), outputpkg.NoopProgress())
 	if err != nil {
 		t.Fatalf("matchLocalToRemote() error = %v", err)
 	}
@@ -526,7 +533,7 @@ func TestMatchLocalToRemote_ReportsAmbiguousSuffixMatches(t *testing.T) {
 		LocalFile: &tag.LocalFile{Title: "Track Title", Artist: "Artist", Album: "Album"},
 	}}
 
-	report, err := matchLocalToRemote(context.Background(), localFiles, searcher, "", 0, testLogger())
+	report, err := matchLocalToRemote(context.Background(), localFiles, searcher, "", 0, testLogger(), outputpkg.NoopProgress())
 	if err != nil {
 		t.Fatalf("matchLocalToRemote() error = %v", err)
 	}
@@ -556,7 +563,7 @@ func TestRun_IncludesAmbiguousEntriesInReport(t *testing.T) {
 		LocalFile: &tag.LocalFile{Title: "Track Title", Artist: "Artist", Album: "Album"},
 	}}
 
-	output, err := Run(context.Background(), "", localFiles, searcher, "", "local", 0, true, testLogger())
+	output, err := Run(context.Background(), "", localFiles, searcher, "", "local", 0, true, testLogger(), outputpkg.NoopProgress())
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
@@ -575,7 +582,7 @@ func TestRun_IncludesNoResultCountInSummary(t *testing.T) {
 		LocalFile: &tag.LocalFile{Title: "Track Title", Artist: "Artist", Album: "Album"},
 	}}
 
-	output, err := Run(context.Background(), "", localFiles, searcher, "", "local", 0, true, testLogger())
+	output, err := Run(context.Background(), "", localFiles, searcher, "", "local", 0, true, testLogger(), outputpkg.NoopProgress())
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
@@ -603,7 +610,7 @@ func TestRun_IncludesSearchWarningsAndErrorsInSummary(t *testing.T) {
 		LocalFile: &tag.LocalFile{Title: "Track Title", Artist: "Artist", Album: "Album"},
 	}}
 
-	output, err := Run(context.Background(), "", localFiles, searcher, "", "local", 0, true, testLogger())
+	output, err := Run(context.Background(), "", localFiles, searcher, "", "local", 0, true, testLogger(), outputpkg.NoopProgress())
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
@@ -620,7 +627,7 @@ func TestRun_IncludesSearchWarningsAndErrorsInSummary(t *testing.T) {
 	searcher = &stubSongSearcher{
 		err: fmt.Errorf("subsonic search failed"),
 	}
-	output, err = Run(context.Background(), "", localFiles, searcher, "", "local", 0, true, testLogger())
+	output, err = Run(context.Background(), "", localFiles, searcher, "", "local", 0, true, testLogger(), outputpkg.NoopProgress())
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
@@ -642,7 +649,7 @@ func TestApplyResults_ReturnsAggregateFailure(t *testing.T) {
 		NewRating: 4,
 	}}
 
-	err := ApplyResults(context.Background(), t.TempDir(), results, &navidrome.Client{}, false, testLogger())
+	err := ApplyResults(context.Background(), t.TempDir(), results, &navidrome.Client{}, false, testLogger(), outputpkg.NoopProgress())
 	if err == nil {
 		t.Fatal("ApplyResults() error = nil, want aggregate failure")
 	}

@@ -99,7 +99,7 @@ func Connect(ctx context.Context, cfg *config.Config, logger *log.Logger) (*Clie
 		return nil, fmt.Errorf("connection failed: %w (check baseurl %q)", err, cfg.Navidrome.BaseURL)
 	}
 
-	logger.Info("Connected to Navidrome", "url", cfg.Navidrome.BaseURL, "user", cfg.Navidrome.User)
+	logger.Debug("Connected to Navidrome", "url", cfg.Navidrome.BaseURL, "user", cfg.Navidrome.User)
 	return c, nil
 }
 

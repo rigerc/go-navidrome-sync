@@ -6,6 +6,7 @@ import (
 
 	"github.com/charmbracelet/log"
 	"github.com/rigerc/go-navidrome-ratings-sync/internal/config"
+	"github.com/rigerc/go-navidrome-ratings-sync/internal/output"
 	"github.com/spf13/cobra"
 )
 
@@ -33,7 +34,8 @@ var rootCmd = &cobra.Command{
 			level = log.InfoLevel
 		}
 
-		logger := log.NewWithOptions(os.Stderr, log.Options{
+		manager := output.NewManager(os.Stderr, level)
+		logger := log.NewWithOptions(manager.LogWriter(), log.Options{
 			Level:           level,
 			Formatter:       log.TextFormatter,
 			ReportTimestamp: true,
@@ -41,7 +43,8 @@ var rootCmd = &cobra.Command{
 		})
 		log.SetDefault(logger)
 
-		cmd.SetContext(config.WithContext(cmd.Context(), cfg))
+		ctx := config.WithContext(cmd.Context(), cfg)
+		cmd.SetContext(output.WithContext(ctx, manager))
 		return nil
 	},
 }

@@ -6,6 +6,7 @@ import (
 	"github.com/charmbracelet/log"
 	"github.com/rigerc/go-navidrome-ratings-sync/internal/config"
 	"github.com/rigerc/go-navidrome-ratings-sync/internal/navidrome"
+	"github.com/rigerc/go-navidrome-ratings-sync/internal/output"
 	"github.com/rigerc/go-navidrome-ratings-sync/internal/sync"
 	"github.com/spf13/cobra"
 )
@@ -44,6 +45,9 @@ var syncCmd = &cobra.Command{
 		}
 
 		logger := log.Default()
+		manager := output.FromContext(cmd.Context())
+		progress := manager.NewSyncProgress()
+		defer progress.Close()
 
 		musicPath := cfg.Sync.MusicPath
 		if musicPath == "" {
@@ -60,7 +64,7 @@ var syncCmd = &cobra.Command{
 			"report_json", reportJSONFlag,
 		)
 
-		localFiles, err := sync.ScanLocalFiles(musicPath, logger)
+		localFiles, scanWarnings, err := sync.ScanLocalFiles(musicPath, logger, progress)
 		if err != nil {
 			return err
 		}
@@ -70,24 +74,60 @@ var syncCmd = &cobra.Command{
 			return nil
 		}
 
+		progress.StartConnecting()
 		client, err := navidrome.Connect(cmd.Context(), &cfg, logger)
 		if err != nil {
 			return err
 		}
 
-		runOutput, err := sync.Run(cmd.Context(), musicPath, localFiles, client, cfg.Sync.RemotePathPrefix, cfg.Sync.Prefer, searchIntervalDuration, dryRun, logger)
+		runOutput, err := sync.Run(cmd.Context(), musicPath, localFiles, client, cfg.Sync.RemotePathPrefix, cfg.Sync.Prefer, searchIntervalDuration, dryRun, logger, progress)
 		if err != nil {
 			return err
 		}
+		if len(scanWarnings) > 0 {
+			runOutput.Report.Warnings = append(runOutput.Report.Warnings, scanWarnings...)
+			runOutput.Report.Summary.Warnings += len(scanWarnings)
+		}
 
 		if reportJSONFlag != "" {
+			progress.WritingReport(reportJSONFlag)
 			if err := sync.WriteReportJSON(reportJSONFlag, runOutput.Report); err != nil {
 				return err
 			}
-			logger.Info("Wrote sync report", "path", reportJSONFlag)
+			if !progress.Enabled() {
+				logger.Info("Wrote sync report", "path", reportJSONFlag)
+			}
 		}
 
-		return sync.ApplyResults(cmd.Context(), musicPath, runOutput.Results, client, dryRun, logger)
+		if err := sync.ApplyResults(cmd.Context(), musicPath, runOutput.Results, client, dryRun, logger, progress); err != nil {
+			return err
+		}
+
+		if progress.Enabled() {
+			unmatchedEntries := make([]output.SummaryUnmatched, 0, len(runOutput.Report.Unmatched))
+			for _, item := range runOutput.Report.Unmatched {
+				unmatchedEntries = append(unmatchedEntries, output.SummaryUnmatched{
+					Path:   item.Path,
+					Reason: item.Reason,
+				})
+			}
+			progress.PrintSummary(output.Summary{
+				Pushed:            runOutput.Report.Summary.Pushed,
+				Pulled:            runOutput.Report.Summary.Pulled,
+				Skipped:           runOutput.Report.Summary.Skipped,
+				ConflictsResolved: runOutput.Report.Summary.ConflictsResolved,
+				Matched:           runOutput.Report.Summary.Matched,
+				Unmatched:         runOutput.Report.Summary.Unmatched,
+				NoResults:         runOutput.Report.Summary.NoResults,
+				Ambiguous:         runOutput.Report.Summary.Ambiguous,
+				Warnings:          runOutput.Report.Summary.Warnings,
+				Errors:            runOutput.Report.Summary.Errors,
+				DryRun:            runOutput.Report.Summary.DryRun,
+				UnmatchedEntries:  unmatchedEntries,
+			})
+		}
+
+		return nil
 	},
 }
 

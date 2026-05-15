@@ -16,6 +16,7 @@ import (
 
 	"github.com/charmbracelet/log"
 	"github.com/rigerc/go-navidrome-ratings-sync/internal/navidrome"
+	"github.com/rigerc/go-navidrome-ratings-sync/internal/output"
 	"github.com/rigerc/go-navidrome-ratings-sync/internal/tag"
 )
 
@@ -166,10 +167,13 @@ type searchRateLimiter struct {
 	next     time.Time
 }
 
-func ScanLocalFiles(musicPath string, log *log.Logger) ([]*LocalFile, error) {
+func ScanLocalFiles(musicPath string, log *log.Logger, progress output.SyncProgress) ([]*LocalFile, []IssueEntry, error) {
+	progress.StartScanning()
+
 	workerCount := scanWorkerCount()
 	jobs := make(chan scanJob, workerCount*4)
 	results := make(chan *LocalFile, workerCount*4)
+	warningEntries := make(chan IssueEntry, workerCount*2)
 
 	var workers sync.WaitGroup
 	workers.Add(workerCount)
@@ -180,6 +184,12 @@ func ScanLocalFiles(musicPath string, log *log.Logger) ([]*LocalFile, error) {
 				lf, err := readLocalFile(job.path)
 				if err != nil {
 					log.Warn("Failed to read file metadata", "path", job.relPath, "error", err)
+					warningEntries <- IssueEntry{
+						Path:    job.relPath,
+						Source:  "local",
+						Stage:   "scan_metadata",
+						Message: err.Error(),
+					}
 					lf = &tag.LocalFile{}
 				}
 
@@ -196,6 +206,12 @@ func ScanLocalFiles(musicPath string, log *log.Logger) ([]*LocalFile, error) {
 		err := filepath.WalkDir(musicPath, func(path string, d os.DirEntry, err error) error {
 			if err != nil {
 				log.Warn("Error accessing path", "path", path, "error", err)
+				warningEntries <- IssueEntry{
+					Path:    path,
+					Source:  "local",
+					Stage:   "scan_walk",
+					Message: err.Error(),
+				}
 				return nil
 			}
 			if d.IsDir() || !isSupportedAudioFile(path) {
@@ -220,23 +236,40 @@ func ScanLocalFiles(musicPath string, log *log.Logger) ([]*LocalFile, error) {
 	go func() {
 		workers.Wait()
 		close(results)
+		close(warningEntries)
 	}()
 
 	var files []*LocalFile
+	var warnings []IssueEntry
+	doneWarnings := make(chan struct{})
+	go func() {
+		defer close(doneWarnings)
+		for warning := range warningEntries {
+			warnings = append(warnings, warning)
+		}
+	}()
 	for file := range results {
 		files = append(files, file)
+		if progress.Enabled() && (len(files)%progressInterval == 0) {
+			progress.UpdateScan(len(files))
+		}
 	}
 
 	if err := <-errs; err != nil {
-		return nil, fmt.Errorf("failed to walk music path: %w", err)
+		return nil, nil, fmt.Errorf("failed to walk music path: %w", err)
 	}
+	<-doneWarnings
 
 	sort.Slice(files, func(i, j int) bool {
 		return files[i].RelPath < files[j].RelPath
 	})
 
-	log.Info("Scanned local files", "count", len(files))
-	return files, nil
+	if progress.Enabled() {
+		progress.UpdateScan(len(files))
+	} else {
+		log.Info("Scanned local files", "count", len(files))
+	}
+	return files, warnings, nil
 }
 
 func isSupportedAudioFile(path string) bool {
@@ -265,8 +298,9 @@ func Run(
 	searchInterval time.Duration,
 	dryRun bool,
 	log *log.Logger,
+	progress output.SyncProgress,
 ) (*RunOutput, error) {
-	report, err := matchLocalToRemote(ctx, localFiles, searcher, remotePathPrefix, searchInterval, log)
+	report, err := matchLocalToRemote(ctx, localFiles, searcher, remotePathPrefix, searchInterval, log, progress)
 	if err != nil {
 		return nil, err
 	}
@@ -299,7 +333,7 @@ func Run(
 			RemoteRating: remoteRating,
 		})
 
-		if dryRun {
+		if dryRun && !progress.Enabled() {
 			log.Info(formatMatchedDryRunMessage(m, localRating, remoteRating))
 		}
 
@@ -371,7 +405,7 @@ func Run(
 	runReport.Warnings = append(runReport.Warnings, report.warnings...)
 	runReport.Errors = append(runReport.Errors, report.errors...)
 
-	if dryRun {
+	if dryRun && !progress.Enabled() {
 		for _, unmatched := range report.unmatched {
 			log.Info(formatUnmatchedDryRunMessage(unmatched))
 		}
@@ -380,54 +414,58 @@ func Run(
 		}
 	}
 
-	log.Info("Sync summary",
-		"pushed", pushed, "pulled", pulled,
-		"skipped", skipped, "conflicts_resolved", conflicts,
-		"unmatched", len(report.unmatched),
-		"no_results", noResults,
-		"ambiguous", len(report.ambiguous),
-		"warnings", len(report.warnings),
-		"errors", len(report.errors),
-		"dry_run", dryRun,
-	)
-	if noResults > 0 {
-		log.Info("No-result summary", "count", noResults)
-		for _, item := range report.unmatched {
-			if !isNoResultUnmatched(item) {
-				continue
+	if !progress.Enabled() {
+		log.Info("Sync summary",
+			"pushed", pushed, "pulled", pulled,
+			"skipped", skipped, "conflicts_resolved", conflicts,
+			"unmatched", len(report.unmatched),
+			"no_results", noResults,
+			"ambiguous", len(report.ambiguous),
+			"warnings", len(report.warnings),
+			"errors", len(report.errors),
+			"dry_run", dryRun,
+		)
+		if noResults > 0 {
+			log.Info("No-result summary", "count", noResults)
+			for _, item := range report.unmatched {
+				if !isNoResultUnmatched(item) {
+					continue
+				}
+				log.Info("No-result song",
+					"path", item.path,
+					"reason", item.reason,
+					"query", item.query,
+					"local_path", item.localPath,
+				)
 			}
-			log.Info("No-result song",
-				"path", item.path,
-				"reason", item.reason,
-				"query", item.query,
-				"local_path", item.localPath,
-			)
 		}
-	}
-	if len(report.unmatched) > 0 {
-		log.Info("Unmatched summary", "count", len(report.unmatched))
-		for _, item := range report.unmatched {
-			log.Info("Unmatched song",
-				"path", item.path,
-				"reason", item.reason,
-				"query", item.query,
-				"remote_paths", formatCandidatePaths(item.candidates),
-			)
+		if len(report.unmatched) > 0 {
+			log.Info("Unmatched summary", "count", len(report.unmatched))
+			for _, item := range report.unmatched {
+				log.Info("Unmatched song",
+					"path", item.path,
+					"reason", item.reason,
+					"query", item.query,
+					"remote_paths", formatCandidatePaths(item.candidates),
+				)
+			}
 		}
-	}
-	if len(report.ambiguous) > 0 {
-		log.Info("Ambiguous summary", "count", len(report.ambiguous))
-		for _, item := range report.ambiguous {
-			log.Info("Ambiguous song",
-				"path", item.path,
-				"reason", item.reason,
-				"query", item.query,
-				"remote_paths", formatCandidatePaths(item.candidates),
-			)
+		if len(report.ambiguous) > 0 {
+			log.Info("Ambiguous summary", "count", len(report.ambiguous))
+			for _, item := range report.ambiguous {
+				log.Info("Ambiguous song",
+					"path", item.path,
+					"reason", item.reason,
+					"query", item.query,
+					"remote_paths", formatCandidatePaths(item.candidates),
+				)
+			}
+		}
+		if len(report.warnings) > 0 {
+			log.Info("Warning summary", "count", len(report.warnings))
 		}
 	}
 	if len(report.warnings) > 0 {
-		log.Info("Warning summary", "count", len(report.warnings))
 		for _, item := range report.warnings {
 			log.Warn("Sync warning",
 				"path", item.Path,
@@ -438,8 +476,10 @@ func Run(
 			)
 		}
 	}
-	if len(report.errors) > 0 {
+	if !progress.Enabled() && len(report.errors) > 0 {
 		log.Info("Error summary", "count", len(report.errors))
+	}
+	if len(report.errors) > 0 {
 		for _, item := range report.errors {
 			log.Error("Sync error",
 				"path", item.Path,
@@ -487,7 +527,7 @@ type matchResult struct {
 	errors    []IssueEntry
 }
 
-func matchLocalToRemote(ctx context.Context, localFiles []*LocalFile, searcher songSearcher, remotePathPrefix string, searchInterval time.Duration, log *log.Logger) (*matchReport, error) {
+func matchLocalToRemote(ctx context.Context, localFiles []*LocalFile, searcher songSearcher, remotePathPrefix string, searchInterval time.Duration, log *log.Logger, progress output.SyncProgress) (*matchReport, error) {
 	sorted := make([]*LocalFile, len(localFiles))
 	copy(sorted, localFiles)
 
@@ -506,12 +546,16 @@ func matchLocalToRemote(ctx context.Context, localFiles []*LocalFile, searcher s
 		workerCount = maxMatchWorkers
 	}
 
-	log.Info("Starting remote matching",
-		"total", len(sorted),
-		"workers", workerCount,
-		"remote_path_prefix", remotePathPrefix,
-		"search_interval", searchInterval,
-	)
+	if progress.Enabled() {
+		progress.StartMatching(len(sorted), workerCount)
+	} else {
+		log.Info("Starting remote matching",
+			"total", len(sorted),
+			"workers", workerCount,
+			"remote_path_prefix", remotePathPrefix,
+			"search_interval", searchInterval,
+		)
+	}
 
 	jobs := make(chan int, workerCount*2)
 	results := make(chan matchResult, workerCount*2)
@@ -829,7 +873,9 @@ func matchLocalToRemote(ctx context.Context, localFiles []*LocalFile, searcher s
 		if len(result.errors) > 0 {
 			orderedErrors = append(orderedErrors, result.errors...)
 		}
-		if processed%progressInterval == 0 || processed == len(sorted) {
+		if progress.Enabled() {
+			progress.UpdateMatching(processed, len(sorted), len(matchesByIndex), len(unmatchedByIndex), len(ambiguousByIndex))
+		} else if processed%progressInterval == 0 || processed == len(sorted) {
 			log.Info("Remote matching progress",
 				"processed", processed,
 				"total", len(sorted),
@@ -1260,9 +1306,22 @@ func ApplyResults(
 	client *navidrome.Client,
 	dryRun bool,
 	log *log.Logger,
+	progress output.SyncProgress,
 ) error {
 	failures := 0
 	var firstErr error
+	totalActions := 0
+	for _, result := range results {
+		if result.Action != ActionSkip {
+			totalActions++
+		}
+	}
+	if progress.Enabled() {
+		progress.StartApplying(totalActions, dryRun)
+	}
+	processedActions := 0
+	pushed := 0
+	pulled := 0
 
 	for _, r := range results {
 		switch r.Action {
@@ -1271,8 +1330,11 @@ func ApplyResults(
 
 		case ActionPush:
 			if dryRun {
-				log.Info("[DRY-RUN] Would push rating to Navidrome",
-					"path", r.Path, "rating", r.NewRating)
+				if !progress.Enabled() {
+					log.Info("[DRY-RUN] Would push rating to Navidrome",
+						"path", r.Path, "rating", r.NewRating)
+				}
+				pushed++
 			} else {
 				if err := client.SetRating(ctx, r.RemoteID, r.NewRating); err != nil {
 					log.Error("Failed to push rating",
@@ -1281,17 +1343,27 @@ func ApplyResults(
 					if firstErr == nil {
 						firstErr = err
 					}
+					processedActions++
+					if progress.Enabled() {
+						progress.UpdateApplying(processedActions, totalActions, pushed, pulled, failures, dryRun)
+					}
 					continue
 				}
-				log.Info("Pushed rating to Navidrome",
-					"path", r.Path, "rating", r.NewRating)
+				if !progress.Enabled() {
+					log.Info("Pushed rating to Navidrome",
+						"path", r.Path, "rating", r.NewRating)
+				}
+				pushed++
 			}
 
 		case ActionPull:
 			fullPath := filepath.Join(musicPath, r.Path)
 			if dryRun {
-				log.Info("[DRY-RUN] Would write rating to local file",
-					"path", r.Path, "rating", r.NewRating)
+				if !progress.Enabled() {
+					log.Info("[DRY-RUN] Would write rating to local file",
+						"path", r.Path, "rating", r.NewRating)
+				}
+				pulled++
 			} else {
 				if err := tag.WriteRating(fullPath, r.NewRating); err != nil {
 					log.Error("Failed to write rating",
@@ -1300,11 +1372,23 @@ func ApplyResults(
 					if firstErr == nil {
 						firstErr = err
 					}
+					processedActions++
+					if progress.Enabled() {
+						progress.UpdateApplying(processedActions, totalActions, pushed, pulled, failures, dryRun)
+					}
 					continue
 				}
-				log.Info("Wrote rating to local file",
-					"path", r.Path, "rating", r.NewRating)
+				if !progress.Enabled() {
+					log.Info("Wrote rating to local file",
+						"path", r.Path, "rating", r.NewRating)
+				}
+				pulled++
 			}
+		}
+
+		processedActions++
+		if progress.Enabled() {
+			progress.UpdateApplying(processedActions, totalActions, pushed, pulled, failures, dryRun)
 		}
 	}
 
