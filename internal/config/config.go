@@ -25,7 +25,27 @@ type Config struct {
 		Prefer           string `koanf:"prefer"`
 		RemotePathPrefix string `koanf:"remotepathprefix"`
 		SearchInterval   string `koanf:"searchinterval"`
+		Metadata         struct {
+			Ratings   bool `koanf:"ratings"`
+			PlayStats bool `koanf:"playstats"`
+			Stars     bool `koanf:"stars"`
+		} `koanf:"metadata"`
+		Stars struct {
+			Prefer string `koanf:"prefer"`
+			Tag    string `koanf:"tag"`
+		} `koanf:"stars"`
 	} `koanf:"sync"`
+	Playlists struct {
+		Path             string `koanf:"path"`
+		MusicPath        string `koanf:"musicpath"`
+		RemotePathPrefix string `koanf:"remotepathprefix"`
+		Prefer           string `koanf:"prefer"`
+		Format           string `koanf:"format"`
+		Public           bool   `koanf:"public"`
+		RemoveMissing    bool   `koanf:"removemissing"`
+		OnUnmatched      string `koanf:"onunmatched"`
+		ExportPaths      string `koanf:"exportpaths"`
+	} `koanf:"playlists"`
 }
 
 const (
@@ -83,6 +103,34 @@ func ApplyDefaults(cfg *Config) {
 	if cfg.Sync.SearchInterval == "" {
 		cfg.Sync.SearchInterval = "100ms"
 	}
+	if !cfg.Sync.Metadata.Ratings && !cfg.Sync.Metadata.PlayStats && !cfg.Sync.Metadata.Stars {
+		cfg.Sync.Metadata.Ratings = true
+		cfg.Sync.Metadata.PlayStats = true
+	}
+	if cfg.Sync.Stars.Tag == "" {
+		cfg.Sync.Stars.Tag = "FAVORITE"
+	}
+	if cfg.Playlists.Path == "" {
+		cfg.Playlists.Path = "./playlists"
+	}
+	if cfg.Playlists.Prefer == "" {
+		cfg.Playlists.Prefer = "local"
+	}
+	if cfg.Playlists.Format == "" {
+		cfg.Playlists.Format = "m3u8"
+	}
+	if cfg.Playlists.OnUnmatched == "" {
+		cfg.Playlists.OnUnmatched = "error"
+	}
+	if cfg.Playlists.ExportPaths == "" {
+		cfg.Playlists.ExportPaths = "relative"
+	}
+	if cfg.Playlists.MusicPath == "" {
+		cfg.Playlists.MusicPath = cfg.Sync.MusicPath
+	}
+	if cfg.Playlists.RemotePathPrefix == "" {
+		cfg.Playlists.RemotePathPrefix = cfg.Sync.RemotePathPrefix
+	}
 }
 
 func Validate(cfg *Config) error {
@@ -100,6 +148,18 @@ func Validate(cfg *Config) error {
 	prefer := cfg.Sync.Prefer
 	if prefer != "local" && prefer != "navidrome" {
 		return fmt.Errorf("sync.prefer must be \"local\" or \"navidrome\", got %q", prefer)
+	}
+	if cfg.Sync.Stars.Prefer != "" && cfg.Sync.Stars.Prefer != "local" && cfg.Sync.Stars.Prefer != "navidrome" {
+		return fmt.Errorf("sync.stars.prefer must be \"local\" or \"navidrome\", got %q", cfg.Sync.Stars.Prefer)
+	}
+	if cfg.Playlists.Prefer != "local" && cfg.Playlists.Prefer != "navidrome" {
+		return fmt.Errorf("playlists.prefer must be \"local\" or \"navidrome\", got %q", cfg.Playlists.Prefer)
+	}
+	if cfg.Playlists.OnUnmatched != "error" && cfg.Playlists.OnUnmatched != "skip" {
+		return fmt.Errorf("playlists.onunmatched must be \"error\" or \"skip\", got %q", cfg.Playlists.OnUnmatched)
+	}
+	if cfg.Playlists.ExportPaths != "relative" && cfg.Playlists.ExportPaths != "absolute" && cfg.Playlists.ExportPaths != "remote" {
+		return fmt.Errorf("playlists.exportpaths must be \"relative\", \"absolute\", or \"remote\", got %q", cfg.Playlists.ExportPaths)
 	}
 	if _, err := ParseSearchInterval(cfg.Sync.SearchInterval); err != nil {
 		return fmt.Errorf("sync.searchinterval is invalid: %w", err)

@@ -72,6 +72,35 @@ func WritePOPMRating(filePath string, rating int) error {
 	return nil
 }
 
+func WriteMP3Starred(filePath string, starred bool) error {
+	tag, err := id3v2.Open(filePath, id3v2.Options{Parse: true})
+	if err != nil {
+		return fmt.Errorf("failed to open %s: %w", filePath, err)
+	}
+	defer tag.Close()
+
+	existing := tag.GetFrames(tag.CommonID("TXXX"))
+	tag.DeleteFrames(tag.CommonID("TXXX"))
+	for _, f := range existing {
+		if fr, ok := f.(id3v2.UserDefinedTextFrame); ok {
+			if strings.EqualFold(fr.Description, "FAVORITE") || strings.EqualFold(fr.Description, "STARRED") {
+				continue
+			}
+		}
+		tag.AddFrame(tag.CommonID("TXXX"), f)
+	}
+	if starred {
+		tag.AddFrame(tag.CommonID("TXXX"), id3v2.UserDefinedTextFrame{
+			Description: "FAVORITE",
+			Value:       "1",
+		})
+	}
+	if err := tag.Save(); err != nil {
+		return fmt.Errorf("failed to save %s: %w", filePath, err)
+	}
+	return nil
+}
+
 func WriteMP3PlayStats(filePath string, playCount int64, played *time.Time) error {
 	tag, err := id3v2.Open(filePath, id3v2.Options{Parse: true})
 	if err != nil {
@@ -144,6 +173,9 @@ func readMP3File(filePath string) (*LocalFile, error) {
 					if t, err := time.Parse(time.RFC3339, fr.Value); err == nil {
 						lf.Played = &t
 					}
+				}
+				if strings.EqualFold(fr.Description, "FAVORITE") || strings.EqualFold(fr.Description, "STARRED") {
+					lf.Starred = isTruthyTagValue(fr.Value)
 				}
 			case id3v2.UnsynchronisedLyricsFrame:
 				// UFID stores MusicBrainz ID with owner identifier

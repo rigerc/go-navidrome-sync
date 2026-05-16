@@ -1,6 +1,6 @@
 # go-navidrome-ratings-sync
 
-`go-navidrome-ratings-sync` reads ratings and play statistics from local MP3 and FLAC files, matches those tracks in Navidrome, and syncs metadata either to Navidrome or back to the local files.
+`go-navidrome-ratings-sync` reads ratings, play statistics, starred state, and playlists from local files, matches tracks in Navidrome, and syncs metadata either to Navidrome or back to the local library.
 
 It talks to Navidrome through the Subsonic API for ratings, search, and scrobbling, with native Navidrome search support for richer metadata where available.
 
@@ -14,8 +14,10 @@ The sync flow is:
 4. Match local files to remote songs using metadata and path heuristics.
 5. Sync ratings in the configured direction when local and remote values differ.
 6. Sync play statistics by taking the highest play count and most recent last-played timestamp.
+7. Optionally sync starred/favorite state.
+8. Sync local `.m3u` / `.m3u8` playlists with Navidrome playlists.
 
-When both sides have a rating and they conflict, the configured preference decides whether the local rating or the Navidrome rating wins. Play statistics are reconciled independently of rating conflicts.
+When both sides have a rating or starred-state conflict, the configured preference decides whether local metadata or Navidrome wins. Play statistics are reconciled independently by keeping the larger/newer state.
 
 ## Navidrome requirement
 
@@ -51,6 +53,24 @@ sync:
   prefer: "local"
   remotepathprefix: "/share/Music"
   searchinterval: "100ms"
+  metadata:
+    ratings: true
+    playstats: true
+    stars: false
+  stars:
+    prefer: ""
+    tag: "FAVORITE"
+
+playlists:
+  path: "./playlists"
+  musicpath: ""          # defaults to sync.musicpath
+  remotepathprefix: ""   # defaults to sync.remotepathprefix
+  prefer: "local"
+  format: "m3u8"
+  public: false
+  removemissing: false
+  onunmatched: "error"
+  exportpaths: "relative"
 ```
 
 ## Usage
@@ -89,7 +109,29 @@ Write a JSON report with matched, unmatched, and ambiguous results:
 go run . sync --dry-run --report-json sync-report.json
 ```
 
+Enable starred/favorite sync for a run:
+
+```bash
+go run . sync --stars --stars-prefer local
+```
+
 `sync.searchinterval` and `--search-interval` control the minimum delay between remote search requests. Use `0s` to disable the delay.
+
+## Playlists
+
+Playlist commands sync local `.m3u` / `.m3u8` files with Navidrome playlists. Local playlists are matched to remote playlists by name. Remote smart playlists are read-only and can be exported but not replaced.
+
+```bash
+go run . playlists list
+go run . playlists export ./playlists
+go run . playlists import ./playlists
+go run . playlists sync ./playlists --prefer local
+go run . playlists sync ./playlists --dry-run --report-json playlists-report.json
+```
+
+Playlist import fails on unmatched tracks by default. Use `--on-unmatched skip` to create/update playlists with only matched tracks. `--remove-missing` is destructive: during playlist sync it deletes remote playlists that are not present locally.
+
+Navidrome also has its own playlist auto-import support (`AutoImportPlaylists` / `PlaylistsPath`). If that is enabled, avoid syncing the same playlist folder from both systems unless that is intentional.
 
 ## Synced metadata
 
@@ -98,9 +140,13 @@ The tool currently supports:
 - Ratings for MP3 and FLAC files.
 - Play counts for MP3 and FLAC files.
 - Last-played timestamps for MP3 and FLAC files.
+- Starred/favorite state for MP3 and FLAC files.
+- Playlists through `.m3u` / `.m3u8` files.
 
 When pushing play statistics to Navidrome, the tool submits scrobbles for the difference between the local and remote play counts. When pulling play statistics from Navidrome, it writes the remote play count and last-played timestamp back to the local tags.
 
+Starred state uses `TXXX:FAVORITE=1` for MP3 files and `FAVORITE=1` for FLAC/Vorbis comments.
+
 ## Failure behavior
 
-If any rating write, scrobble submission, or local tag write fails, the command exits non-zero after logging the per-file errors. This makes the tool safer to use from cron, systemd timers, and other automation.
+If any rating write, starred-state write, scrobble submission, playlist update, or local tag write fails, the command exits non-zero after logging the per-file errors. This makes the tool safer to use from cron, systemd timers, and other automation.

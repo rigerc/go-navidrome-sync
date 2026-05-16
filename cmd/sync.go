@@ -21,6 +21,9 @@ var (
 	searchInterval   string
 	tlsSkipFlag      bool
 	reportJSONFlag   string
+	syncStarsFlag    bool
+	noStarsFlag      bool
+	starsPreferFlag  string
 )
 
 var syncCmd = &cobra.Command{
@@ -80,7 +83,26 @@ var syncCmd = &cobra.Command{
 			return err
 		}
 
-		runOutput, err := sync.Run(cmd.Context(), musicPath, localFiles, client, cfg.Sync.RemotePathPrefix, cfg.Sync.Prefer, searchIntervalDuration, dryRun, logger, progress)
+		options := sync.Options{
+			SyncRatings:   cfg.Sync.Metadata.Ratings,
+			SyncPlayStats: cfg.Sync.Metadata.PlayStats,
+			SyncStars:     cfg.Sync.Metadata.Stars,
+			PreferStars:   cfg.Sync.Stars.Prefer,
+		}
+		if syncStarsFlag {
+			options.SyncStars = true
+		}
+		if noStarsFlag {
+			options.SyncStars = false
+		}
+		if starsPreferFlag != "" {
+			if starsPreferFlag != "local" && starsPreferFlag != "navidrome" {
+				return fmt.Errorf("--stars-prefer must be \"local\" or \"navidrome\", got %q", starsPreferFlag)
+			}
+			options.PreferStars = starsPreferFlag
+		}
+
+		runOutput, err := sync.RunWithOptions(cmd.Context(), musicPath, localFiles, client, cfg.Sync.RemotePathPrefix, cfg.Sync.Prefer, searchIntervalDuration, dryRun, logger, progress, options)
 		if err != nil {
 			return err
 		}
@@ -169,5 +191,8 @@ func init() {
 	syncCmd.Flags().StringVar(&remotePathPrefix, "remote-path-prefix", "", "strip this prefix from Navidrome song paths before matching")
 	syncCmd.Flags().StringVar(&searchInterval, "search-interval", "", "minimum delay between remote search requests, e.g. 100ms or 1s (overrides config)")
 	syncCmd.Flags().StringVar(&reportJSONFlag, "report-json", "", "write a JSON report with matched, unmatched, and ambiguous results")
+	syncCmd.Flags().BoolVar(&syncStarsFlag, "stars", false, "sync starred/favorite state")
+	syncCmd.Flags().BoolVar(&noStarsFlag, "no-stars", false, "disable starred/favorite state sync")
+	syncCmd.Flags().StringVar(&starsPreferFlag, "stars-prefer", "", "preferred source for starred conflicts: \"local\" or \"navidrome\"")
 	syncCmd.Flags().BoolVar(&tlsSkipFlag, "tls-skip-verify", false, "skip TLS certificate verification (overrides config)")
 }

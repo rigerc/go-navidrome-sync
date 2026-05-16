@@ -50,6 +50,7 @@ type LocalFile struct {
 	Rating        int
 	PlayCount     int64
 	Played        *time.Time
+	Starred       bool
 	MusicBrainzID string
 	ISRC          string
 	Artist        string
@@ -108,6 +109,8 @@ func readFlacFile(filePath string) (*LocalFile, error) {
 				if t, err := time.Parse(time.RFC3339, tag[1]); err == nil {
 					lf.Played = &t
 				}
+			case "FAVORITE", "STARRED":
+				lf.Starred = isTruthyTagValue(tag[1])
 			case "MUSICBRAINZ_TRACKID":
 				lf.MusicBrainzID = tag[1]
 			case "ISRC":
@@ -132,6 +135,27 @@ type rawBlock struct {
 	body   []byte
 }
 
+func WriteStarred(filePath string, starred bool) error {
+	ext := strings.ToLower(filepath.Ext(filePath))
+	switch ext {
+	case ".mp3":
+		return WriteMP3Starred(filePath, starred)
+	case ".flac":
+		return WriteFlacStarred(filePath, starred)
+	default:
+		return fmt.Errorf("unsupported file format: %s", ext)
+	}
+}
+
+func isTruthyTagValue(value string) bool {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "1", "true", "yes", "y", "favorite", "starred":
+		return true
+	default:
+		return false
+	}
+}
+
 func WritePlayStats(filePath string, playCount int64, played *time.Time) error {
 	ext := strings.ToLower(filepath.Ext(filePath))
 	switch ext {
@@ -144,7 +168,19 @@ func WritePlayStats(filePath string, playCount int64, played *time.Time) error {
 	}
 }
 
+func WriteFlacStarred(filePath string, starred bool) error {
+	return rewriteFlacVorbisComments(filePath, func(vc *meta.VorbisComment) {
+		setVorbisCommentStarred(vc, starred)
+	})
+}
+
 func WriteFlacPlayStats(filePath string, playCount int64, played *time.Time) error {
+	return rewriteFlacVorbisComments(filePath, func(vc *meta.VorbisComment) {
+		setVorbisCommentPlayStats(vc, playCount, played)
+	})
+}
+
+func rewriteFlacVorbisComments(filePath string, update func(*meta.VorbisComment)) error {
 	info, err := os.Stat(filePath)
 	if err != nil {
 		return fmt.Errorf("failed to stat %s: %w", filePath, err)
@@ -200,7 +236,7 @@ func WriteFlacPlayStats(filePath string, playCount int64, played *time.Time) err
 		if err != nil {
 			return fmt.Errorf("failed to parse existing VorbisComment: %w", err)
 		}
-		setVorbisCommentPlayStats(vc, playCount, played)
+		update(vc)
 		newVcBody, err = encodeVorbisCommentBody(vc)
 		if err != nil {
 			return fmt.Errorf("failed to encode VorbisComment: %w", err)
@@ -209,7 +245,7 @@ func WriteFlacPlayStats(filePath string, playCount int64, played *time.Time) err
 		vc := &meta.VorbisComment{
 			Vendor: "go-navidrome-ratings-sync",
 		}
-		setVorbisCommentPlayStats(vc, playCount, played)
+		update(vc)
 		newVcBody, err = encodeVorbisCommentBody(vc)
 		if err != nil {
 			return fmt.Errorf("failed to encode VorbisComment: %w", err)
@@ -263,6 +299,19 @@ func WriteFlacPlayStats(filePath string, playCount int64, played *time.Time) err
 		return fmt.Errorf("failed to write %s: %w", filePath, err)
 	}
 	return nil
+}
+
+func setVorbisCommentStarred(vc *meta.VorbisComment, starred bool) {
+	for i := 0; i < len(vc.Tags); i++ {
+		key := strings.ToUpper(vc.Tags[i][0])
+		if key == "FAVORITE" || key == "STARRED" {
+			vc.Tags = append(vc.Tags[:i], vc.Tags[i+1:]...)
+			i--
+		}
+	}
+	if starred {
+		vc.Tags = append(vc.Tags, [2]string{"FAVORITE", "1"})
+	}
 }
 
 func setVorbisCommentPlayStats(vc *meta.VorbisComment, playCount int64, played *time.Time) {

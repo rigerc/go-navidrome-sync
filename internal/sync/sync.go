@@ -34,9 +34,9 @@ func parseRemotePlayed(s string) *time.Time {
 type Action int
 
 const (
-	ActionPush Action = iota
+	ActionSkip Action = iota
+	ActionPush
 	ActionPull
-	ActionSkip
 )
 
 func (a Action) String() string {
@@ -48,6 +48,13 @@ func (a Action) String() string {
 	default:
 		return "SKIP"
 	}
+}
+
+type Options struct {
+	SyncRatings   bool
+	SyncPlayStats bool
+	SyncStars     bool
+	PreferStars   string
 }
 
 type Result struct {
@@ -63,6 +70,10 @@ type Result struct {
 	OldRemotePlayCount int64
 	NewPlayCount       int64
 	NewPlayed          *time.Time
+	StarAction         Action
+	OldLocalStarred    bool
+	OldRemoteStarred   bool
+	NewStarred         bool
 }
 
 type LocalFile struct {
@@ -147,6 +158,10 @@ var (
 	minSuffixScore   = 3
 	progressInterval = 25
 )
+
+func DefaultOptions() Options {
+	return Options{SyncRatings: true, SyncPlayStats: true}
+}
 
 type songSearcher interface {
 	SearchSongsByTitle(ctx context.Context, title string, limit int) ([]*navidrome.RemoteSong, error)
@@ -317,6 +332,22 @@ func Run(
 	log *log.Logger,
 	progress output.SyncProgress,
 ) (*RunOutput, error) {
+	return RunWithOptions(ctx, musicPath, localFiles, searcher, remotePathPrefix, prefer, searchInterval, dryRun, log, progress, DefaultOptions())
+}
+
+func RunWithOptions(
+	ctx context.Context,
+	musicPath string,
+	localFiles []*LocalFile,
+	searcher songSearcher,
+	remotePathPrefix string,
+	prefer string,
+	searchInterval time.Duration,
+	dryRun bool,
+	log *log.Logger,
+	progress output.SyncProgress,
+	options Options,
+) (*RunOutput, error) {
 	report, err := matchLocalToRemote(ctx, localFiles, searcher, remotePathPrefix, searchInterval, log, progress)
 	if err != nil {
 		return nil, err
@@ -357,26 +388,30 @@ func Run(
 		// --- rating action ---
 		var ratingAction Action
 		var newRating int
-		switch {
-		case localRating == 0 && remoteRating == 0:
-			ratingAction = ActionSkip
-		case localRating == remoteRating:
-			ratingAction = ActionSkip
-		case localRating > 0 && remoteRating == 0:
-			ratingAction = ActionPush
-			newRating = localRating
-		case remoteRating > 0 && localRating == 0:
-			ratingAction = ActionPull
-			newRating = remoteRating
-		default:
-			conflicts++
-			if prefer == "local" {
+		if options.SyncRatings {
+			switch {
+			case localRating == 0 && remoteRating == 0:
+				ratingAction = ActionSkip
+			case localRating == remoteRating:
+				ratingAction = ActionSkip
+			case localRating > 0 && remoteRating == 0:
 				ratingAction = ActionPush
 				newRating = localRating
-			} else {
+			case remoteRating > 0 && localRating == 0:
 				ratingAction = ActionPull
 				newRating = remoteRating
+			default:
+				conflicts++
+				if prefer == "local" {
+					ratingAction = ActionPush
+					newRating = localRating
+				} else {
+					ratingAction = ActionPull
+					newRating = remoteRating
+				}
 			}
+		} else {
+			ratingAction = ActionSkip
 		}
 		switch ratingAction {
 		case ActionPush:
@@ -390,25 +425,53 @@ func Run(
 		// --- play-stats action (take max play count and most recent last played) ---
 		localPlayed := m.local.Played
 		remotePlayed := parseRemotePlayed(m.remote.Played)
-		localMore := m.local.PlayCount > m.remote.PlayCount ||
-			(localPlayed != nil && (remotePlayed == nil || localPlayed.After(*remotePlayed)))
-		remoteMore := m.remote.PlayCount > m.local.PlayCount ||
-			(remotePlayed != nil && (localPlayed == nil || remotePlayed.After(*localPlayed)))
-
 		var playStatsAction Action
 		var newPlayCount int64
 		var newPlayed *time.Time
-		switch {
-		case localMore:
-			playStatsAction = ActionPush
-			newPlayCount = m.local.PlayCount
-			newPlayed = localPlayed
-		case remoteMore:
-			playStatsAction = ActionPull
-			newPlayCount = m.remote.PlayCount
-			newPlayed = remotePlayed
-		default:
+		if options.SyncPlayStats {
+			localMore := m.local.PlayCount > m.remote.PlayCount ||
+				(localPlayed != nil && (remotePlayed == nil || localPlayed.After(*remotePlayed)))
+			remoteMore := m.remote.PlayCount > m.local.PlayCount ||
+				(remotePlayed != nil && (localPlayed == nil || remotePlayed.After(*localPlayed)))
+
+			switch {
+			case localMore:
+				playStatsAction = ActionPush
+				newPlayCount = m.local.PlayCount
+				newPlayed = localPlayed
+			case remoteMore:
+				playStatsAction = ActionPull
+				newPlayCount = m.remote.PlayCount
+				newPlayed = remotePlayed
+			default:
+				playStatsAction = ActionSkip
+			}
+		} else {
 			playStatsAction = ActionSkip
+		}
+
+		localStarred := m.local.Starred
+		remoteStarred := m.remote.Starred != ""
+		starPrefer := prefer
+		if options.PreferStars != "" {
+			starPrefer = options.PreferStars
+		}
+		starAction := ActionSkip
+		newStarred := false
+		if options.SyncStars && localStarred != remoteStarred {
+			if starPrefer == "local" {
+				starAction = ActionPush
+				newStarred = localStarred
+			} else {
+				starAction = ActionPull
+				newStarred = remoteStarred
+			}
+		}
+		switch starAction {
+		case ActionPush:
+			pushed++
+		case ActionPull:
+			pulled++
 		}
 
 		results = append(results, Result{
@@ -424,6 +487,10 @@ func Run(
 			OldRemotePlayCount: m.remote.PlayCount,
 			NewPlayCount:       newPlayCount,
 			NewPlayed:          newPlayed,
+			StarAction:         starAction,
+			OldLocalStarred:    localStarred,
+			OldRemoteStarred:   remoteStarred,
+			NewStarred:         newStarred,
 		})
 	}
 
@@ -1352,6 +1419,9 @@ func ApplyResults(
 		if result.PlayStatsAction != ActionSkip {
 			totalActions++
 		}
+		if result.StarAction != ActionSkip {
+			totalActions++
+		}
 	}
 	if progress.Enabled() {
 		progress.StartApplying(totalActions, dryRun)
@@ -1412,6 +1482,59 @@ func ApplyResults(
 					if !progress.Enabled() {
 						log.Info("Wrote rating to local file",
 							"path", r.Path, "rating", r.NewRating)
+					}
+					pulled++
+				}
+			}
+			processedActions++
+			if progress.Enabled() {
+				progress.UpdateApplying(processedActions, totalActions, pushed, pulled, failures, dryRun)
+			}
+		}
+
+		// --- stars ---
+		switch r.StarAction {
+		case ActionPush:
+			if dryRun {
+				if !progress.Enabled() {
+					log.Info("[DRY-RUN] Would push starred state to Navidrome", "path", r.Path, "starred", r.NewStarred)
+				}
+				pushed++
+			} else {
+				var err error
+				if r.NewStarred {
+					err = client.Star(ctx, r.RemoteID)
+				} else {
+					err = client.Unstar(ctx, r.RemoteID)
+				}
+				if err != nil {
+					log.Error("Failed to push starred state", "path", r.Path, "starred", r.NewStarred, "error", err)
+					recordErr(err)
+				} else {
+					if !progress.Enabled() {
+						log.Info("Pushed starred state to Navidrome", "path", r.Path, "starred", r.NewStarred)
+					}
+					pushed++
+				}
+			}
+			processedActions++
+			if progress.Enabled() {
+				progress.UpdateApplying(processedActions, totalActions, pushed, pulled, failures, dryRun)
+			}
+		case ActionPull:
+			fullPath := filepath.Join(musicPath, r.Path)
+			if dryRun {
+				if !progress.Enabled() {
+					log.Info("[DRY-RUN] Would write starred state to local file", "path", r.Path, "starred", r.NewStarred)
+				}
+				pulled++
+			} else {
+				if err := tag.WriteStarred(fullPath, r.NewStarred); err != nil {
+					log.Error("Failed to write starred state", "path", r.Path, "starred", r.NewStarred, "error", err)
+					recordErr(err)
+				} else {
+					if !progress.Enabled() {
+						log.Info("Wrote starred state to local file", "path", r.Path, "starred", r.NewStarred)
 					}
 					pulled++
 				}

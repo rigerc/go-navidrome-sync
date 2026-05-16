@@ -11,3 +11,21 @@ sync:
   prefer: "local"
   remotepathprefix: "/share/Music"
   searchinterval: "100ms"
+  metadata:
+    ratings: true
+    playstats: true
+    stars: false
+  stars:
+    prefer: ""
+    tag: "FAVORITE"
+
+playlists:
+  path: "testdata/"
+  musicpath: ""
+  remotepathprefix: "/share/Music"
+  prefer: "local"
+  format: "m3u8"
+  public: false
+  removemissing: false
+  onunmatched: "error"
+  exportpaths: "relative"

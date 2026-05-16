@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -24,6 +25,7 @@ type RemoteSong struct {
 	UserRating    int
 	PlayCount     int64
 	Played        string
+	Starred       string
 	MusicBrainzID string
 	Artist        string
 	Album         string
@@ -36,6 +38,7 @@ type Song struct {
 	UserRating    int    `json:"userRating,omitempty"`
 	PlayCount     int64  `json:"playCount,omitempty"`
 	Played        string `json:"played,omitempty"`
+	Starred       string `json:"starred,omitempty"`
 	MusicBrainzID string `json:"musicBrainzId,omitempty"`
 	Artist        string `json:"artist,omitempty"`
 	Album         string `json:"album,omitempty"`
@@ -43,6 +46,39 @@ type Song struct {
 
 type SearchResult3 struct {
 	Song []Song `json:"song,omitempty"`
+}
+
+type RemotePlaylist struct {
+	ID        string
+	Name      string
+	Comment   string
+	Owner     string
+	Public    bool
+	SongCount int
+	Duration  int
+	Created   string
+	Changed   string
+	Readonly  bool
+	Entry     []Song
+}
+
+type playlistDTO struct {
+	ID         string `json:"id,omitempty"`
+	Name       string `json:"name,omitempty"`
+	Comment    string `json:"comment,omitempty"`
+	Owner      string `json:"owner,omitempty"`
+	Public     bool   `json:"public,omitempty"`
+	SongCount  int    `json:"songCount,omitempty"`
+	Duration   int    `json:"duration,omitempty"`
+	Created    string `json:"created,omitempty"`
+	Changed    string `json:"changed,omitempty"`
+	Readonly   bool   `json:"readonly,omitempty"`
+	ValidUntil string `json:"validUntil,omitempty"`
+	Entry      []Song `json:"entry,omitempty"`
+}
+
+type playlistsDTO struct {
+	Playlist []playlistDTO `json:"playlist,omitempty"`
 }
 
 type Client struct {
@@ -157,6 +193,22 @@ func (c *Client) SetRating(ctx context.Context, id string, rating int) error {
 	return nil
 }
 
+func (c *Client) Star(ctx context.Context, id string) error {
+	_, err := c.do(ctx, "star", map[string]string{"id": id})
+	if err != nil {
+		return fmt.Errorf("starring remote song %q: %w", id, err)
+	}
+	return nil
+}
+
+func (c *Client) Unstar(ctx context.Context, id string) error {
+	_, err := c.do(ctx, "unstar", map[string]string{"id": id})
+	if err != nil {
+		return fmt.Errorf("unstarring remote song %q: %w", id, err)
+	}
+	return nil
+}
+
 func (c *Client) Scrobble(ctx context.Context, id string, n int, playedAt time.Time) error {
 	for i := range n {
 		offset := time.Duration(n-1-i) * time.Minute
@@ -171,6 +223,101 @@ func (c *Client) Scrobble(ctx context.Context, id string, n int, playedAt time.T
 		}
 	}
 	return nil
+}
+
+func (c *Client) Playlists(ctx context.Context) ([]RemotePlaylist, error) {
+	body, err := c.do(ctx, "getPlaylists", nil)
+	if err != nil {
+		return nil, fmt.Errorf("listing playlists: %w", err)
+	}
+	if body.Playlists == nil {
+		return nil, nil
+	}
+	playlists := make([]RemotePlaylist, 0, len(body.Playlists.Playlist))
+	for _, p := range body.Playlists.Playlist {
+		playlists = append(playlists, remotePlaylist(p))
+	}
+	return playlists, nil
+}
+
+func (c *Client) Playlist(ctx context.Context, id string) (*RemotePlaylist, error) {
+	body, err := c.do(ctx, "getPlaylist", map[string]string{"id": id})
+	if err != nil {
+		return nil, fmt.Errorf("fetching playlist %q: %w", id, err)
+	}
+	if body.Playlist == nil {
+		return nil, nil
+	}
+	p := remotePlaylist(*body.Playlist)
+	return &p, nil
+}
+
+func (c *Client) CreatePlaylist(ctx context.Context, name string, songIDs []string) (*RemotePlaylist, error) {
+	params := url.Values{"name": []string{name}}
+	for _, id := range songIDs {
+		params.Add("songId", id)
+	}
+	body, err := c.doValues(ctx, "createPlaylist", params)
+	if err != nil {
+		return nil, fmt.Errorf("creating playlist %q: %w", name, err)
+	}
+	if body.Playlist == nil {
+		return nil, nil
+	}
+	p := remotePlaylist(*body.Playlist)
+	return &p, nil
+}
+
+func (c *Client) ReplacePlaylist(ctx context.Context, playlistID string, songIDs []string) (*RemotePlaylist, error) {
+	params := url.Values{"playlistId": []string{playlistID}}
+	for _, id := range songIDs {
+		params.Add("songId", id)
+	}
+	body, err := c.doValues(ctx, "createPlaylist", params)
+	if err != nil {
+		return nil, fmt.Errorf("replacing playlist %q: %w", playlistID, err)
+	}
+	if body.Playlist == nil {
+		return nil, nil
+	}
+	p := remotePlaylist(*body.Playlist)
+	return &p, nil
+}
+
+func (c *Client) UpdatePlaylist(ctx context.Context, playlistID string, public *bool) error {
+	params := map[string]string{"playlistId": playlistID}
+	if public != nil {
+		params["public"] = strconv.FormatBool(*public)
+	}
+	_, err := c.do(ctx, "updatePlaylist", params)
+	if err != nil {
+		return fmt.Errorf("updating playlist %q: %w", playlistID, err)
+	}
+	return nil
+}
+
+func (c *Client) DeletePlaylist(ctx context.Context, id string) error {
+	_, err := c.do(ctx, "deletePlaylist", map[string]string{"id": id})
+	if err != nil {
+		return fmt.Errorf("deleting playlist %q: %w", id, err)
+	}
+	return nil
+}
+
+func remotePlaylist(p playlistDTO) RemotePlaylist {
+	return RemotePlaylist{
+		ID:        p.ID,
+		Name:      p.Name,
+		Comment:   p.Comment,
+		Owner:     p.Owner,
+		Public:    p.Public,
+		SongCount: p.SongCount,
+		Duration:  p.Duration,
+		Created:   p.Created,
+		Changed:   p.Changed,
+		Readonly:  p.Readonly,
+		Entry:     p.Entry,
+	}
 }
 
 func (c *Client) SearchSongsByTitle(ctx context.Context, title string, limit int) ([]*RemoteSong, error) {
@@ -223,9 +370,11 @@ func (c *Client) SearchSongsByTitle(ctx context.Context, title string, limit int
 		}
 		playCount := int64(0)
 		played := ""
+		starred := ""
 		if details != nil {
 			playCount = details.PlayCount
 			played = details.Played
+			starred = details.Starred
 		}
 		results = append(results, &RemoteSong{
 			ID:            song.ID,
@@ -233,6 +382,7 @@ func (c *Client) SearchSongsByTitle(ctx context.Context, title string, limit int
 			UserRating:    userRating,
 			PlayCount:     playCount,
 			Played:        played,
+			Starred:       starred,
 			MusicBrainzID: song.MusicBrainzID,
 			Artist:        song.Artist,
 			Album:         song.Album,
@@ -274,6 +424,8 @@ type responseBody struct {
 
 	Song         *Song          `json:"song,omitempty"`
 	SearchResult *SearchResult3 `json:"searchResult3,omitempty"`
+	Playlists    *playlistsDTO  `json:"playlists,omitempty"`
+	Playlist     *playlistDTO   `json:"playlist,omitempty"`
 }
 
 type subsonicError struct {
@@ -300,14 +452,35 @@ func (c *Client) do(ctx context.Context, endpoint string, queryParams map[string
 	if err != nil {
 		return nil, err
 	}
+	values := url.Values{}
+	for key, value := range params {
+		values.Set(key, value)
+	}
 	for key, value := range queryParams {
-		params[key] = value
+		values.Set(key, value)
+	}
+	return c.doValues(ctx, endpoint, values)
+}
+
+func (c *Client) doValues(ctx context.Context, endpoint string, queryParams url.Values) (*responseBody, error) {
+	params, err := c.authParams()
+	if err != nil {
+		return nil, err
+	}
+	values := url.Values{}
+	for key, value := range params {
+		values.Set(key, value)
+	}
+	for key, items := range queryParams {
+		for _, value := range items {
+			values.Add(key, value)
+		}
 	}
 
 	var envelope responseEnvelope
 	resp, err := c.http.R().
 		SetContext(ctx).
-		SetQueryParams(params).
+		SetQueryParamsFromValues(values).
 		SetResult(&envelope).
 		Get("/rest/" + endpoint)
 	if err != nil {
