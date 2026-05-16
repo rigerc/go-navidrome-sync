@@ -12,9 +12,9 @@ import (
 	"time"
 
 	"github.com/charmbracelet/log"
-	"github.com/rigerc/go-navidrome-ratings-sync/internal/navidrome"
-	"github.com/rigerc/go-navidrome-ratings-sync/internal/output"
-	"github.com/rigerc/go-navidrome-ratings-sync/internal/tag"
+	"github.com/rigerc/go-navidrome-sync/internal/navidrome"
+	"github.com/rigerc/go-navidrome-sync/internal/output"
+	"github.com/rigerc/go-navidrome-sync/internal/tag"
 )
 
 func parseRemotePlayed(s string) *time.Time {

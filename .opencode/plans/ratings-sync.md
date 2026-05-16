@@ -1,4 +1,4 @@
-# Implementation Plan: go-navidrome-ratings-sync
+# Implementation Plan: go-navidrome-sync
 
 ## Summary
 Scan MP3 files recursively, read/write POPM ratings, bidirectional sync with Navidrome via Subsonic API.
@@ -68,6 +68,6 @@ sync:
 
 ## CLI
 ```
-go-navidrome-ratings-sync sync [flags] [music-path]
+go-navidrome-sync sync [flags] [music-path]
 ```
 Flags: --config, --dry-run, --prefer, --user, --password, --baseurl

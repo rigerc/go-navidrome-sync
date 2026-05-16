@@ -1,4 +1,4 @@
-module github.com/rigerc/go-navidrome-ratings-sync
+module github.com/rigerc/go-navidrome-sync
 
 go 1.26.1
 

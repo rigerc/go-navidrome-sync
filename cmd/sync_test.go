@@ -3,7 +3,7 @@ package cmd
 import (
 	"testing"
 
-	"github.com/rigerc/go-navidrome-ratings-sync/internal/config"
+	"github.com/rigerc/go-navidrome-sync/internal/config"
 )
 
 func TestApplySyncOverrides_AllowsFlagOnlyConfig(t *testing.T) {

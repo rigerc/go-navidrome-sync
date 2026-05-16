@@ -16,7 +16,7 @@ import (
 
 	"github.com/charmbracelet/log"
 	"github.com/go-resty/resty/v2"
-	"github.com/rigerc/go-navidrome-ratings-sync/internal/config"
+	"github.com/rigerc/go-navidrome-sync/internal/config"
 )
 
 type RemoteSong struct {
@@ -95,7 +95,7 @@ const (
 	maxIdleConns          = 10
 	maxIdlePerHost        = 4
 	apiVersion            = "1.16.1"
-	clientName            = "go-navidrome-ratings-sync"
+	clientName            = "go-navidrome-sync"
 	saltLength            = 12
 	subsonicAuthErrorCode = 40
 )

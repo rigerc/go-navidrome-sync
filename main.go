@@ -1,6 +1,6 @@
 package main
 
-import "github.com/rigerc/go-navidrome-ratings-sync/cmd"
+import "github.com/rigerc/go-navidrome-sync/cmd"
 
 func main() {
 	cmd.Execute()

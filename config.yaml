@@ -1,4 +1,4 @@
-loglevel: debug
+loglevel: info
 
 navidrome:
   baseurl: "https://music.bsgb.nl:443"

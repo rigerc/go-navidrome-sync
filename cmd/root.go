@@ -5,15 +5,15 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/log"
-	"github.com/rigerc/go-navidrome-ratings-sync/internal/config"
-	"github.com/rigerc/go-navidrome-ratings-sync/internal/output"
+	"github.com/rigerc/go-navidrome-sync/internal/config"
+	"github.com/rigerc/go-navidrome-sync/internal/output"
 	"github.com/spf13/cobra"
 )
 
 var cfgFile string
 
 var rootCmd = &cobra.Command{
-	Use:   "go-navidrome-ratings-sync",
+	Use:   "go-navidrome-sync",
 	Short: "Sync ratings with Navidrome",
 	Long:  "A tool to synchronize music ratings between local MP3 files and a Navidrome server.",
 	PersistentPreRunE: func(cmd *cobra.Command, args []string) error {

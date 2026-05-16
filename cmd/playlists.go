@@ -5,9 +5,9 @@ import (
 	"path/filepath"
 
 	"github.com/charmbracelet/log"
-	"github.com/rigerc/go-navidrome-ratings-sync/internal/config"
-	"github.com/rigerc/go-navidrome-ratings-sync/internal/navidrome"
-	"github.com/rigerc/go-navidrome-ratings-sync/internal/playlist"
+	"github.com/rigerc/go-navidrome-sync/internal/config"
+	"github.com/rigerc/go-navidrome-sync/internal/navidrome"
+	"github.com/rigerc/go-navidrome-sync/internal/playlist"
 	"github.com/spf13/cobra"
 )
 

@@ -7,17 +7,17 @@ import (
 	"testing"
 
 	"github.com/charmbracelet/log"
-	"github.com/rigerc/go-navidrome-ratings-sync/internal/navidrome"
+	"github.com/rigerc/go-navidrome-sync/internal/navidrome"
 )
 
 // stubClient implements Client for testing.
 type stubClient struct {
-	playlists      []navidrome.RemotePlaylist
-	playlistByID   map[string]*navidrome.RemotePlaylist
-	searchResults  map[string][]*navidrome.RemoteSong
-	created        []string
-	replaced       []string
-	deleted        []string
+	playlists     []navidrome.RemotePlaylist
+	playlistByID  map[string]*navidrome.RemotePlaylist
+	searchResults map[string][]*navidrome.RemoteSong
+	created       []string
+	replaced      []string
+	deleted       []string
 }
 
 func (s *stubClient) Playlists(_ context.Context) ([]navidrome.RemotePlaylist, error) {

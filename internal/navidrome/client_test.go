@@ -10,7 +10,7 @@ import (
 
 	"github.com/charmbracelet/log"
 	"github.com/go-resty/resty/v2"
-	"github.com/rigerc/go-navidrome-ratings-sync/internal/config"
+	"github.com/rigerc/go-navidrome-sync/internal/config"
 )
 
 func TestConnect_AuthenticationFailure(t *testing.T) {

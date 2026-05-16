@@ -243,7 +243,7 @@ func rewriteFlacVorbisComments(filePath string, update func(*meta.VorbisComment)
 		}
 	} else {
 		vc := &meta.VorbisComment{
-			Vendor: "go-navidrome-ratings-sync",
+			Vendor: "go-navidrome-sync",
 		}
 		update(vc)
 		newVcBody, err = encodeVorbisCommentBody(vc)

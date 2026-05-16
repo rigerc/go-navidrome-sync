@@ -13,9 +13,9 @@ import (
 	"time"
 
 	"github.com/charmbracelet/log"
-	"github.com/rigerc/go-navidrome-ratings-sync/internal/navidrome"
-	outputpkg "github.com/rigerc/go-navidrome-ratings-sync/internal/output"
-	"github.com/rigerc/go-navidrome-ratings-sync/internal/tag"
+	"github.com/rigerc/go-navidrome-sync/internal/navidrome"
+	outputpkg "github.com/rigerc/go-navidrome-sync/internal/output"
+	"github.com/rigerc/go-navidrome-sync/internal/tag"
 )
 
 func TestScanLocalFiles_SortsFiltersAndKeepsUnreadableFiles(t *testing.T) {
@@ -710,13 +710,13 @@ func TestWriteReportJSON_WritesStructuredReport(t *testing.T) {
 func TestResolveRatingAction(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
-		name        string
-		local       int
-		remote      int
-		prefer      string
-		enabled     bool
-		wantAction  Action
-		wantRating  int
+		name         string
+		local        int
+		remote       int
+		prefer       string
+		enabled      bool
+		wantAction   Action
+		wantRating   int
 		wantConflict bool
 	}{
 		{"disabled", 3, 5, "local", false, ActionSkip, 0, false},
@@ -746,13 +746,13 @@ func TestResolveRatingAction(t *testing.T) {
 func TestResolveStarAction(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
-		name         string
-		local        bool
-		remote       bool
-		prefer       string
-		enabled      bool
-		wantAction   Action
-		wantStarred  bool
+		name        string
+		local       bool
+		remote      bool
+		prefer      string
+		enabled     bool
+		wantAction  Action
+		wantStarred bool
 	}{
 		{"disabled", true, false, "local", false, ActionSkip, false},
 		{"both unstarred", false, false, "local", true, ActionSkip, false},
@@ -788,12 +788,12 @@ func TestResolvePlayStatsAction(t *testing.T) {
 	}
 
 	cases := []struct {
-		name        string
-		local       *LocalFile
-		remote      *navidrome.RemoteSong
-		enabled     bool
-		wantAction  Action
-		wantCount   int64
+		name       string
+		local      *LocalFile
+		remote     *navidrome.RemoteSong
+		enabled    bool
+		wantAction Action
+		wantCount  int64
 	}{
 		{"disabled", makeLocal(5, &now), makeRemote(2, ""), false, ActionSkip, 0},
 		{"equal counts no dates", makeLocal(3, nil), makeRemote(3, ""), true, ActionSkip, 0},

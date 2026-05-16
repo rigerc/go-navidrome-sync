@@ -16,7 +16,7 @@ const (
 	defaultQuery      = "Brænder"
 	defaultResultSize = 10
 	apiVersion        = "1.16.1"
-	clientName        = "go-navidrome-ratings-sync-go-subsonic-test"
+	clientName        = "go-navidrome-sync-go-subsonic-test"
 )
 
 func main() {

@@ -4,10 +4,10 @@ import (
 	"fmt"
 
 	"github.com/charmbracelet/log"
-	"github.com/rigerc/go-navidrome-ratings-sync/internal/config"
-	"github.com/rigerc/go-navidrome-ratings-sync/internal/navidrome"
-	"github.com/rigerc/go-navidrome-ratings-sync/internal/output"
-	"github.com/rigerc/go-navidrome-ratings-sync/internal/sync"
+	"github.com/rigerc/go-navidrome-sync/internal/config"
+	"github.com/rigerc/go-navidrome-sync/internal/navidrome"
+	"github.com/rigerc/go-navidrome-sync/internal/output"
+	"github.com/rigerc/go-navidrome-sync/internal/sync"
 	"github.com/spf13/cobra"
 )
 
