@@ -16,6 +16,11 @@ import (
 	"github.com/rigerc/go-navidrome-ratings-sync/internal/navidrome"
 )
 
+var filenameReplacer = strings.NewReplacer(
+	"/", "_", "\\", "_", ":", "_", "*", "_",
+	"?", "_", `"`, "_", "<", "_", ">", "_", "|", "_",
+)
+
 type Config struct {
 	Path             string
 	MusicPath        string
@@ -551,6 +556,5 @@ func safeFilename(name string) string {
 	if name == "" {
 		return "playlist"
 	}
-	replacer := strings.NewReplacer("/", "_", "\\", "_", ":", "_", "*", "_", "?", "_", "\"", "_", "<", "_", ">", "_", "|", "_")
-	return replacer.Replace(name)
+	return filenameReplacer.Replace(name)
 }

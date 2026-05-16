@@ -46,7 +46,7 @@ func WritePOPMRating(filePath string, rating int) error {
 	defer tag.Close()
 
 	popmID := tag.CommonID("POPM")
-	popm := id3v2.PopularimeterFrame{}
+	var popm id3v2.PopularimeterFrame
 	if f := tag.GetLastFrame(popmID); f != nil {
 		if existing, ok := f.(id3v2.PopularimeterFrame); ok {
 			popm.Email = existing.Email
@@ -63,7 +63,7 @@ func WritePOPMRating(filePath string, rating int) error {
 		Counter: popm.Counter,
 	}
 
-	tag.AddFrame(popmID, &popm)
+	tag.AddFrame(popmID, popm)
 
 	if err := tag.Save(); err != nil {
 		return fmt.Errorf("failed to save %s: %w", filePath, err)

@@ -364,18 +364,7 @@ func (c *Client) SearchSongsByTitle(ctx context.Context, title string, limit int
 			return nil, fmt.Errorf("fetching search result track details for %q: %w", song.ID, err)
 		}
 
-		userRating := 0
-		if details != nil {
-			userRating = details.UserRating
-		}
-		playCount := int64(0)
-		played := ""
-		starred := ""
-		if details != nil {
-			playCount = details.PlayCount
-			played = details.Played
-			starred = details.Starred
-		}
+		userRating, playCount, played, starred := enrichSong(details)
 		results = append(results, &RemoteSong{
 			ID:            song.ID,
 			Path:          song.Path,
@@ -393,6 +382,15 @@ func (c *Client) SearchSongsByTitle(ctx context.Context, title string, limit int
 	}
 
 	return results, nil
+}
+
+// enrichSong extracts per-user metadata from a song detail response.
+// details may be nil when the Subsonic server returns no detail for a track.
+func enrichSong(details *Song) (userRating int, playCount int64, played, starred string) {
+	if details == nil {
+		return
+	}
+	return details.UserRating, details.PlayCount, details.Played, details.Starred
 }
 
 func (c *Client) SearchSongsByTitleFallback(ctx context.Context, title string, limit int) ([]*RemoteSong, error) {
