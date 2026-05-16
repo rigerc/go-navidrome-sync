@@ -32,7 +32,6 @@ type Config struct {
 		} `koanf:"metadata"`
 		Stars struct {
 			Prefer string `koanf:"prefer"`
-			Tag    string `koanf:"tag"`
 		} `koanf:"stars"`
 	} `koanf:"sync"`
 	Playlists struct {
@@ -107,9 +106,6 @@ func ApplyDefaults(cfg *Config) {
 		cfg.Sync.Metadata.Ratings = true
 		cfg.Sync.Metadata.PlayStats = true
 	}
-	if cfg.Sync.Stars.Tag == "" {
-		cfg.Sync.Stars.Tag = "FAVORITE"
-	}
 	if cfg.Playlists.Path == "" {
 		cfg.Playlists.Path = "./playlists"
 	}
@@ -151,15 +147,6 @@ func Validate(cfg *Config) error {
 	}
 	if cfg.Sync.Stars.Prefer != "" && cfg.Sync.Stars.Prefer != "local" && cfg.Sync.Stars.Prefer != "navidrome" {
 		return fmt.Errorf("sync.stars.prefer must be \"local\" or \"navidrome\", got %q", cfg.Sync.Stars.Prefer)
-	}
-	if cfg.Playlists.Prefer != "local" && cfg.Playlists.Prefer != "navidrome" {
-		return fmt.Errorf("playlists.prefer must be \"local\" or \"navidrome\", got %q", cfg.Playlists.Prefer)
-	}
-	if cfg.Playlists.OnUnmatched != "error" && cfg.Playlists.OnUnmatched != "skip" {
-		return fmt.Errorf("playlists.onunmatched must be \"error\" or \"skip\", got %q", cfg.Playlists.OnUnmatched)
-	}
-	if cfg.Playlists.ExportPaths != "relative" && cfg.Playlists.ExportPaths != "absolute" && cfg.Playlists.ExportPaths != "remote" {
-		return fmt.Errorf("playlists.exportpaths must be \"relative\", \"absolute\", or \"remote\", got %q", cfg.Playlists.ExportPaths)
 	}
 	if _, err := ParseSearchInterval(cfg.Sync.SearchInterval); err != nil {
 		return fmt.Errorf("sync.searchinterval is invalid: %w", err)

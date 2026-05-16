@@ -144,11 +144,14 @@ type scanJob struct {
 	relPath string
 }
 
-var (
-	readLocalFile    = tag.ReadLocalFile
-	audioFileExts    = map[string]struct{}{".mp3": {}, ".flac": {}}
+const (
 	maxScanWorkers   = 32
 	progressInterval = 25
+)
+
+var (
+	readLocalFile = tag.ReadLocalFile
+	audioFileExts = map[string]struct{}{".mp3": {}, ".flac": {}}
 )
 
 func DefaultOptions() Options {

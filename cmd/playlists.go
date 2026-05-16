@@ -31,11 +31,6 @@ var playlistsListCmd = &cobra.Command{
 	Short: "List Navidrome playlists",
 	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		cfg, err := playlistConfig(cmd, nil)
-		if err != nil {
-			return err
-		}
-		_ = cfg
 		client, err := navidrome.Connect(cmd.Context(), config.FromContext(cmd.Context()), log.Default())
 		if err != nil {
 			return err
@@ -183,14 +178,8 @@ func playlistConfig(cmd *cobra.Command, args []string) (playlist.Config, error) 
 		return playlist.Config{}, err
 	}
 	pc.MusicPath = absMusic
-	if pc.Prefer != "local" && pc.Prefer != "navidrome" {
-		return playlist.Config{}, fmt.Errorf("playlist prefer must be \"local\" or \"navidrome\", got %q", pc.Prefer)
-	}
-	if pc.OnUnmatched != "error" && pc.OnUnmatched != "skip" {
-		return playlist.Config{}, fmt.Errorf("playlist on-unmatched must be \"error\" or \"skip\", got %q", pc.OnUnmatched)
-	}
-	if pc.ExportPaths != "relative" && pc.ExportPaths != "absolute" && pc.ExportPaths != "remote" {
-		return playlist.Config{}, fmt.Errorf("playlist export-paths must be \"relative\", \"absolute\", or \"remote\", got %q", pc.ExportPaths)
+	if err := pc.Validate(); err != nil {
+		return playlist.Config{}, err
 	}
 	return pc, nil
 }

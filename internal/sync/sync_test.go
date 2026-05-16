@@ -707,6 +707,114 @@ func TestWriteReportJSON_WritesStructuredReport(t *testing.T) {
 	}
 }
 
+func TestResolveRatingAction(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name        string
+		local       int
+		remote      int
+		prefer      string
+		enabled     bool
+		wantAction  Action
+		wantRating  int
+		wantConflict bool
+	}{
+		{"disabled", 3, 5, "local", false, ActionSkip, 0, false},
+		{"both zero", 0, 0, "local", true, ActionSkip, 0, false},
+		{"equal", 3, 3, "local", true, ActionSkip, 0, false},
+		{"local only", 3, 0, "local", true, ActionPush, 3, false},
+		{"remote only", 0, 4, "local", true, ActionPull, 4, false},
+		{"conflict prefer local", 3, 5, "local", true, ActionPush, 3, true},
+		{"conflict prefer navidrome", 3, 5, "navidrome", true, ActionPull, 5, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			action, rating, conflict := resolveRatingAction(tc.local, tc.remote, tc.prefer, tc.enabled)
+			if action != tc.wantAction {
+				t.Errorf("action = %v, want %v", action, tc.wantAction)
+			}
+			if rating != tc.wantRating {
+				t.Errorf("rating = %d, want %d", rating, tc.wantRating)
+			}
+			if conflict != tc.wantConflict {
+				t.Errorf("conflict = %v, want %v", conflict, tc.wantConflict)
+			}
+		})
+	}
+}
+
+func TestResolveStarAction(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name         string
+		local        bool
+		remote       bool
+		prefer       string
+		enabled      bool
+		wantAction   Action
+		wantStarred  bool
+	}{
+		{"disabled", true, false, "local", false, ActionSkip, false},
+		{"both unstarred", false, false, "local", true, ActionSkip, false},
+		{"both starred", true, true, "local", true, ActionSkip, false},
+		{"local starred prefer local", true, false, "local", true, ActionPush, true},
+		{"local unstarred prefer local", false, true, "local", true, ActionPush, false},
+		{"local starred prefer navidrome", true, false, "navidrome", true, ActionPull, false},
+		{"local unstarred prefer navidrome", false, true, "navidrome", true, ActionPull, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			action, starred := resolveStarAction(tc.local, tc.remote, tc.prefer, tc.enabled)
+			if action != tc.wantAction {
+				t.Errorf("action = %v, want %v", action, tc.wantAction)
+			}
+			if starred != tc.wantStarred {
+				t.Errorf("starred = %v, want %v", starred, tc.wantStarred)
+			}
+		})
+	}
+}
+
+func TestResolvePlayStatsAction(t *testing.T) {
+	t.Parallel()
+	now := time.Now().Truncate(time.Second)
+	earlier := now.Add(-time.Hour)
+
+	makeLocal := func(count int64, played *time.Time) *LocalFile {
+		return &LocalFile{LocalFile: &tag.LocalFile{PlayCount: count, Played: played}}
+	}
+	makeRemote := func(count int64, played string) *navidrome.RemoteSong {
+		return &navidrome.RemoteSong{PlayCount: count, Played: played}
+	}
+
+	cases := []struct {
+		name        string
+		local       *LocalFile
+		remote      *navidrome.RemoteSong
+		enabled     bool
+		wantAction  Action
+		wantCount   int64
+	}{
+		{"disabled", makeLocal(5, &now), makeRemote(2, ""), false, ActionSkip, 0},
+		{"equal counts no dates", makeLocal(3, nil), makeRemote(3, ""), true, ActionSkip, 0},
+		{"local higher count", makeLocal(5, nil), makeRemote(3, ""), true, ActionPush, 5},
+		{"remote higher count", makeLocal(2, nil), makeRemote(7, ""), true, ActionPull, 7},
+		{"local newer date same count", makeLocal(3, &now), makeRemote(3, earlier.Format(time.RFC3339)), true, ActionPush, 3},
+		{"remote newer date same count", makeLocal(3, &earlier), makeRemote(3, now.Format(time.RFC3339)), true, ActionPull, 3},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			action, count, _ := resolvePlayStatsAction(tc.local, tc.remote, tc.enabled)
+			if action != tc.wantAction {
+				t.Errorf("action = %v, want %v", action, tc.wantAction)
+			}
+			if count != tc.wantCount {
+				t.Errorf("count = %d, want %d", count, tc.wantCount)
+			}
+		})
+	}
+}
+
 func mustWriteFile(t *testing.T, path string) {
 	t.Helper()
 

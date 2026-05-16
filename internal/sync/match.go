@@ -17,8 +17,11 @@ import (
 )
 
 var (
-	trackPrefixRe   = regexp.MustCompile(`^(\d+(?:-\d+)?)(?:\s*-\s*|\s+)`)
-	songCleanRe     = regexp.MustCompile(`[^a-z0-9]+`)
+	trackPrefixRe = regexp.MustCompile(`^(\d+(?:-\d+)?)(?:\s*-\s*|\s+)`)
+	songCleanRe   = regexp.MustCompile(`[^a-z0-9]+`)
+)
+
+const (
 	maxSearchHits   = 5
 	maxMatchWorkers = 4
 	minSuffixScore  = 3

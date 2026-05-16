@@ -59,7 +59,6 @@ sync:
     stars: false
   stars:
     prefer: ""
-    tag: "FAVORITE"
 
 playlists:
   path: "./playlists"

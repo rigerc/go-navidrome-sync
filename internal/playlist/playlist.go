@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -16,9 +17,12 @@ import (
 	"github.com/rigerc/go-navidrome-ratings-sync/internal/navidrome"
 )
 
-var filenameReplacer = strings.NewReplacer(
-	"/", "_", "\\", "_", ":", "_", "*", "_",
-	"?", "_", `"`, "_", "<", "_", ">", "_", "|", "_",
+var (
+	filenameReplacer = strings.NewReplacer(
+		"/", "_", "\\", "_", ":", "_", "*", "_",
+		"?", "_", `"`, "_", "<", "_", ">", "_", "|", "_",
+	)
+	trackPrefixRe = regexp.MustCompile(`^(\d+(?:-\d+)?)(?:\s*-\s*|\s+)`)
 )
 
 type Config struct {
@@ -30,6 +34,19 @@ type Config struct {
 	RemoveMissing    bool
 	OnUnmatched      string
 	ExportPaths      string
+}
+
+func (c Config) Validate() error {
+	if c.Prefer != "local" && c.Prefer != "navidrome" {
+		return fmt.Errorf("playlist prefer must be %q or %q, got %q", "local", "navidrome", c.Prefer)
+	}
+	if c.OnUnmatched != "error" && c.OnUnmatched != "skip" {
+		return fmt.Errorf("playlist on-unmatched must be %q or %q, got %q", "error", "skip", c.OnUnmatched)
+	}
+	if c.ExportPaths != "relative" && c.ExportPaths != "absolute" && c.ExportPaths != "remote" {
+		return fmt.Errorf("playlist export-paths must be %q, %q, or %q, got %q", "relative", "absolute", "remote", c.ExportPaths)
+	}
+	return nil
 }
 
 type Local struct {
@@ -433,33 +450,10 @@ func pathMetadata(rel string) (artist string, album string, title string) {
 
 func trackTitleFromPathPart(pathPart string) string {
 	name := strings.TrimSuffix(pathPart, filepath.Ext(pathPart))
-	fields := strings.Fields(name)
-	if len(fields) > 1 {
-		first := strings.Trim(fields[0], "-.")
-		if isTrackNumber(first) {
-			name = strings.TrimSpace(strings.TrimPrefix(name, fields[0]))
-			name = strings.TrimLeft(name, " -")
-		}
+	if matches := trackPrefixRe.FindStringSubmatch(name); len(matches) > 0 {
+		name = strings.TrimSpace(strings.TrimPrefix(name, matches[0]))
 	}
 	return name
-}
-
-func isTrackNumber(value string) bool {
-	if value == "" {
-		return false
-	}
-	seenDigit := false
-	for _, r := range value {
-		if r >= '0' && r <= '9' {
-			seenDigit = true
-			continue
-		}
-		if r == '-' && seenDigit {
-			continue
-		}
-		return false
-	}
-	return seenDigit
 }
 
 func joinQueryParts(parts ...string) string {
