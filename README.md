@@ -1,4 +1,6 @@
-# go-navidrome-sync
+# 🎵 go-navidrome-sync
+
+> ⚠️ **AI-assisted project.** This codebase was developed with significant AI assistance. It has not been exhaustively audited by a human. Use with caution, especially in production environments or against a music library you cannot easily restore.
 
 `go-navidrome-sync` reads ratings, play statistics, starred state, and playlists from local files, matches tracks in Navidrome, and syncs metadata either to Navidrome or back to the local library.
 
