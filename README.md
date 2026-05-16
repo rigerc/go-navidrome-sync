@@ -37,6 +37,8 @@ Without it, Navidrome may not return the real track path, which breaks path-base
 
 The default config file is `config.yaml`. Pass a different file with `-c /path/to/config.yaml`.
 
+Copy `config.example.yaml` to `config.yaml` and adjust it for your environment.
+
 If `config.yaml` is missing, the tool still runs from environment variables and command-line flags alone.
 
 Every config key can be set as an environment variable by uppercasing and prefixing with `APP_`, replacing `.` with `_`. For example, `navidrome.password` → `APP_NAVIDROME_PASSWORD`.

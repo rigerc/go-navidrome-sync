@@ -1,0 +1,75 @@
+# Example configuration for go-navidrome-sync.
+# Copy this file to config.yaml and adjust the values for your environment.
+
+# Log verbosity. One of: debug, info, warn, error. Default: info.
+loglevel: info
+
+navidrome:
+  # Required. Base URL of your Navidrome instance.
+  baseurl: "https://your-navidrome.example.com"
+  # Required. Navidrome username.
+  user: "your-user"
+  # Required. Navidrome password. Prefer APP_NAVIDROME_PASSWORD for secrets.
+  password: your-password
+  # Skip TLS certificate verification. Default: false.
+  tlsskipverify: false
+
+sync:
+  # Required. Path to the local music library root.
+  musicpath: "/path/to/music"
+  # Conflict resolution when both sides have a rating and they differ.
+  # "local" — local file wins (default)
+  # "navidrome" — Navidrome wins
+  prefer: "local"
+  # Strip this prefix from Navidrome track paths before comparing with local
+  # relative paths. Useful when Navidrome serves files from a network share
+  # mounted at a different path than the local library root.
+  # Example: "/share/Music"
+  remotepathprefix: ""
+  # Minimum delay between Subsonic search API calls.
+  # Increase if Navidrome rate-limits searches. Use "0s" to disable.
+  # Default: "100ms"
+  searchinterval: "100ms"
+  # Choose which metadata categories to sync. If all three are false, ratings
+  # and playstats are enabled by default.
+  metadata:
+    ratings: true    # sync star ratings (1–5)
+    playstats: true  # sync play count and last-played timestamp
+    stars: false     # sync starred/favorite state (opt-in)
+  stars:
+    # Conflict resolution for starred state, when both sides differ.
+    # Same values as sync.prefer. Falls back to sync.prefer when empty.
+    prefer: ""
+
+playlists:
+  # Directory to scan for local .m3u / .m3u8 files. Scanned recursively.
+  # Default: "./playlists"
+  path: "./playlists"
+  # Music library root used to resolve relative track paths inside playlists.
+  # Defaults to sync.musicpath when empty.
+  musicpath: ""
+  # Same as sync.remotepathprefix but for playlist track matching.
+  # Defaults to sync.remotepathprefix when empty.
+  remotepathprefix: ""
+  # Conflict resolution when both a local and remote playlist exist with the
+  # same name and different contents.
+  # "local" — push local playlist to Navidrome (default)
+  # "navidrome" — export remote playlist over the local file
+  prefer: "local"
+  # Format used when writing exported playlists to disk.
+  # "m3u8" (default) or "m3u"
+  format: "m3u8"
+  # Make newly-created remote playlists public. Default: false.
+  public: false
+  # During sync, delete remote playlists that have no matching local file.
+  # Destructive — off by default.
+  removemissing: false
+  # What to do when a local playlist track cannot be matched to a Navidrome song.
+  # "error" — abort the playlist action and report it as an error (default)
+  # "skip" — create/update the playlist with only the matched tracks
+  onunmatched: "error"
+  # Path style used when writing track paths into exported .m3u files.
+  # "relative" — relative to the playlist file's directory (default)
+  # "absolute" — absolute path on the local filesystem
+  # "remote" — Navidrome's own path for the track
+  exportpaths: "relative"
