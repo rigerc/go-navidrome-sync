@@ -73,6 +73,27 @@ func TestScanLocalFiles_SortsFiltersAndKeepsUnreadableFiles(t *testing.T) {
 	}
 }
 
+func TestScanLocalFiles_RecognizesNewExtensions(t *testing.T) {
+	root := t.TempDir()
+
+	for _, name := range []string{"a.ogg", "b.opus", "c.m4a", "d.aac", "e.mp4", "f.oga"} {
+		mustWriteFile(t, filepath.Join(root, name))
+	}
+	mustWriteFile(t, filepath.Join(root, "skip.txt"))
+
+	original := readLocalFile
+	t.Cleanup(func() { readLocalFile = original })
+	readLocalFile = func(string) (*tag.LocalFile, error) { return &tag.LocalFile{}, nil }
+
+	files, _, err := ScanLocalFiles(root, testLogger(), outputpkg.NoopProgress())
+	if err != nil {
+		t.Fatalf("ScanLocalFiles() error = %v", err)
+	}
+	if len(files) != 6 {
+		t.Fatalf("len(files) = %d, want 6 (the .txt must be skipped)", len(files))
+	}
+}
+
 func TestScanLocalFiles_UsesMultipleWorkers(t *testing.T) {
 	root := t.TempDir()
 

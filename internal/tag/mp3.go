@@ -10,17 +10,6 @@ import (
 	"github.com/bogem/id3v2"
 )
 
-var popmThresholds = []struct {
-	threshold int
-	stars     int
-}{
-	{1, 1},
-	{64, 2},
-	{128, 3},
-	{196, 4},
-	{255, 5},
-}
-
 var starsToPopm = map[int]uint8{
 	0: 0,
 	1: 1,
@@ -146,10 +135,26 @@ func readMP3File(filePath string) (*LocalFile, error) {
 	defer tag.Close()
 
 	lf := &LocalFile{}
+	var rc ratingCandidates
 
-	if f := tag.GetLastFrame(tag.CommonID("POPM")); f != nil {
-		if popf, ok := f.(id3v2.PopularimeterFrame); ok {
-			lf.Rating = mapPopmToStars(int(popf.Rating))
+	// POPM frames are distinguished by their email/rater identifier so the WMP
+	// (non-linear) and iTunes (linear 0–100) byte scales map correctly. A POPM
+	// with no/unknown rater is treated as the WMP scale, matching legacy behavior.
+	for _, f := range tag.GetFrames(tag.CommonID("POPM")) {
+		popf, ok := f.(id3v2.PopularimeterFrame)
+		if !ok {
+			continue
+		}
+		email := strings.ToLower(popf.Email)
+		switch {
+		case strings.Contains(email, "itunes") || strings.Contains(email, "apple"):
+			if v := popmITunesToStars(popf.Rating); v > 0 {
+				rc.itunes = v
+			}
+		default:
+			if v := popmWMPToStars(popf.Rating); v > 0 {
+				rc.wmp = v
+			}
 		}
 	}
 
@@ -163,6 +168,16 @@ func readMP3File(filePath string) (*LocalFile, error) {
 				}
 				if strings.EqualFold(fr.Description, "ISRC") {
 					lf.ISRC = fr.Value
+				}
+				if strings.EqualFold(fr.Description, "FMPS_Rating") {
+					if stars, ok := fmpsToStars(fr.Value); ok {
+						rc.mediaMonkey = stars
+					}
+				}
+				if strings.EqualFold(fr.Description, "RATING") {
+					if stars, ok := ratingIntToStars(fr.Value); ok {
+						rc.foobar = stars
+					}
 				}
 				if strings.EqualFold(fr.Description, "PLAY_COUNT") {
 					if n, err := strconv.ParseInt(fr.Value, 10, 64); err == nil && n > 0 {
@@ -215,15 +230,6 @@ func readMP3File(filePath string) (*LocalFile, error) {
 		}
 	}
 
+	lf.Rating = rc.resolve()
 	return lf, nil
-}
-
-func mapPopmToStars(popm int) int {
-	stars := 0
-	for _, entry := range popmThresholds {
-		if popm >= entry.threshold {
-			stars = entry.stars
-		}
-	}
-	return stars
 }
