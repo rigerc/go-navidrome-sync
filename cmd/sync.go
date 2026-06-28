@@ -8,6 +8,7 @@ import (
 	"github.com/rigerc/go-navidrome-sync/internal/navidrome"
 	"github.com/rigerc/go-navidrome-sync/internal/output"
 	"github.com/rigerc/go-navidrome-sync/internal/sync"
+	"github.com/rigerc/go-navidrome-sync/internal/tag"
 	"github.com/spf13/cobra"
 )
 
@@ -28,8 +29,8 @@ var (
 
 var syncCmd = &cobra.Command{
 	Use:   "sync [music-path]",
-	Short: "Sync ratings between local MP3/FLAC files and Navidrome",
-	Long:  "Scan music files for ratings and bidirectionally sync them with a Navidrome server.",
+	Short: "Sync ratings between local audio files and Navidrome",
+	Long:  "Scan music files (MP3, FLAC, Ogg, Opus, M4A/AAC) for ratings and bidirectionally sync them with a Navidrome server.",
 	Args:  cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		baseCfg := config.FromContext(cmd.Context())
@@ -46,6 +47,7 @@ var syncCmd = &cobra.Command{
 		if err != nil {
 			return fmt.Errorf("parse sync search interval: %w", err)
 		}
+		tag.ConfigureRatingOrder(cfg.Sync.RatingTagOrder)
 
 		logger := log.Default()
 		manager := output.FromContext(cmd.Context())

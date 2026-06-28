@@ -10,7 +10,7 @@ It talks to Navidrome through the Subsonic API for ratings, search, and scrobbli
 
 The sync flow is:
 
-1. Scan a local music directory for `.mp3` and `.flac` files.
+1. Scan a local music directory for supported audio files (`.mp3`, `.flac`, `.ogg`, `.oga`, `.opus`, `.m4a`, `.aac`, `.mp4`).
 2. Read local rating, play count, last-played, and identifying metadata from each file.
 3. Search Navidrome for matching songs through the Subsonic API.
 4. Match local files to remote songs using metadata and path heuristics.
@@ -85,6 +85,13 @@ sync:
     # Conflict resolution for starred state, when both sides differ.
     # Same values as sync.prefer. Falls back to sync.prefer when empty.
     prefer: ""
+  # Priority order of rating sources to read from a file. The first source that
+  # yields a rating wins. Each source maps to the tag(s) that application writes
+  # (and to the right value scale): MediaMonkey -> FMPS_Rating (float 0.0-1.0),
+  # foobar2000 -> RATING (int 1-5), WMP -> POPM (non-linear byte scale),
+  # iTunes -> POPM / rating (linear 0-100). Sources not present in a file are
+  # simply skipped. Default: ["WMP", "iTunes", "MediaMonkey", "foobar2000"].
+  ratingtagorder: ["WMP", "iTunes", "MediaMonkey", "foobar2000"]
 
 playlists:
   # Directory to scan for local .m3u / .m3u8 files. Scanned recursively.
@@ -182,17 +189,37 @@ Navidrome also has its own playlist auto-import support (`AutoImportPlaylists` /
 
 ## Synced metadata
 
-The tool currently supports:
+The tool reads and writes ratings, play counts, last-played timestamps, and
+starred/favorite state for these containers:
 
-- Ratings for MP3 and FLAC files.
-- Play counts for MP3 and FLAC files.
-- Last-played timestamps for MP3 and FLAC files.
-- Starred/favorite state for MP3 and FLAC files.
-- Playlists through `.m3u` / `.m3u8` files.
+| Container | Extensions | Backend |
+|-----------|------------|---------|
+| MP3 | `.mp3` | `bogem/id3v2` (ID3v2) |
+| FLAC | `.flac` | `mewkiz/flac` (Vorbis comments) |
+| Ogg / Opus | `.ogg`, `.oga`, `.opus` | TagLib (Vorbis comments) |
+| M4A / AAC / MP4 | `.m4a`, `.aac`, `.mp4` | TagLib (MP4 atoms) |
+
+The Ogg/Opus and M4A paths use [`go.senan.xyz/taglib`](https://pkg.go.dev/go.senan.xyz/taglib),
+an embedded WebAssembly build of TagLib, so no `cgo` or system libraries are
+required (`CGO_ENABLED=0` builds work).
+
+Ratings are read using the configurable `sync.ratingtagorder` (see the config
+reference). MP3 and FLAC retain full per-source fidelity, including
+distinguishing WMP from iTunes `POPM` frames by their rater identifier. For the
+TagLib-backed formats, TagLib normalizes away the `POPM` rater, so only the
+Vorbis/MP4 rating sources (`MediaMonkey` via `FMPS_RATING`, `foobar2000` via
+`RATING`) are distinguished.
+
+Playlists are also synced through `.m3u` / `.m3u8` files.
 
 When pushing play statistics to Navidrome, the tool submits scrobbles for the difference between the local and remote play counts. When pulling play statistics from Navidrome, it writes the remote play count and last-played timestamp back to the local tags.
 
-Starred state uses `TXXX:FAVORITE=1` for MP3 files and `FAVORITE=1` for FLAC/Vorbis comments.
+Starred state uses `TXXX:FAVORITE=1` for MP3 files and `FAVORITE=1` for Vorbis comments / MP4 atoms.
+
+> **Note:** the rating value mapping for FMPS_Rating now uses a ceiling-based
+> curve (0.2/0.4/0.6/0.8/1.0 land exactly on 1–5 stars) to match the
+> `nd-rating-sync` plugin. Pre-existing libraries rated near a star boundary may
+> shift by one star on the next sync.
 
 ## Failure behavior
 

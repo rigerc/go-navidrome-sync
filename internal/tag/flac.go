@@ -5,7 +5,6 @@ import (
 	"encoding/binary"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -13,38 +12,6 @@ import (
 	"github.com/mewkiz/flac"
 	"github.com/mewkiz/flac/meta"
 )
-
-func ReadRating(filePath string) (int, error) {
-	ext := strings.ToLower(filepath.Ext(filePath))
-	switch ext {
-	case ".mp3":
-		return ReadPOPMRating(filePath)
-	case ".flac":
-		return readFlacRating(filePath)
-	default:
-		return 0, nil
-	}
-}
-
-func readFlacRating(filePath string) (int, error) {
-	lf, err := readFlacFile(filePath)
-	if err != nil {
-		return 0, err
-	}
-	return lf.Rating, nil
-}
-
-func WriteRating(filePath string, rating int) error {
-	ext := strings.ToLower(filepath.Ext(filePath))
-	switch ext {
-	case ".mp3":
-		return WritePOPMRating(filePath, rating)
-	case ".flac":
-		return WriteFlacRating(filePath, rating)
-	default:
-		return fmt.Errorf("unsupported file format: %s", ext)
-	}
-}
 
 type LocalFile struct {
 	Rating        int
@@ -58,18 +25,6 @@ type LocalFile struct {
 	Title         string
 }
 
-func ReadLocalFile(filePath string) (*LocalFile, error) {
-	ext := strings.ToLower(filepath.Ext(filePath))
-	switch ext {
-	case ".mp3":
-		return readMP3File(filePath)
-	case ".flac":
-		return readFlacFile(filePath)
-	default:
-		return &LocalFile{}, nil
-	}
-}
-
 func readFlacFile(filePath string) (*LocalFile, error) {
 	stream, err := flac.ParseFile(filePath)
 	if err != nil {
@@ -78,6 +33,7 @@ func readFlacFile(filePath string) (*LocalFile, error) {
 	defer stream.Close()
 
 	lf := &LocalFile{}
+	var rc ratingCandidates
 
 	for _, block := range stream.Blocks {
 		vc, ok := block.Body.(*meta.VorbisComment)
@@ -88,18 +44,12 @@ func readFlacFile(filePath string) (*LocalFile, error) {
 		for _, tag := range vc.Tags {
 			switch strings.ToUpper(tag[0]) {
 			case "FMPS_RATING":
-				if lf.Rating == 0 {
-					f, err := parseFmpsRating(tag[1])
-					if err == nil && f > 0 {
-						lf.Rating = fmpsToStars(f)
-					}
+				if stars, ok := fmpsToStars(tag[1]); ok {
+					rc.mediaMonkey = stars
 				}
 			case "RATING":
-				if lf.Rating == 0 {
-					r, err := parseVorbisRating(tag[1])
-					if err == nil && r > 0 {
-						lf.Rating = r
-					}
+				if stars, ok := ratingIntToStars(tag[1]); ok {
+					rc.foobar = stars
 				}
 			case "PLAY_COUNT":
 				if n, err := strconv.ParseInt(tag[1], 10, 64); err == nil && n > 0 {
@@ -127,6 +77,7 @@ func readFlacFile(filePath string) (*LocalFile, error) {
 		}
 	}
 
+	lf.Rating = rc.resolve()
 	return lf, nil
 }
 
@@ -135,36 +86,12 @@ type rawBlock struct {
 	body   []byte
 }
 
-func WriteStarred(filePath string, starred bool) error {
-	ext := strings.ToLower(filepath.Ext(filePath))
-	switch ext {
-	case ".mp3":
-		return WriteMP3Starred(filePath, starred)
-	case ".flac":
-		return WriteFlacStarred(filePath, starred)
-	default:
-		return fmt.Errorf("unsupported file format: %s", ext)
-	}
-}
-
 func isTruthyTagValue(value string) bool {
 	switch strings.ToLower(strings.TrimSpace(value)) {
 	case "1", "true", "yes", "y", "favorite", "starred":
 		return true
 	default:
 		return false
-	}
-}
-
-func WritePlayStats(filePath string, playCount int64, played *time.Time) error {
-	ext := strings.ToLower(filepath.Ext(filePath))
-	switch ext {
-	case ".mp3":
-		return WriteMP3PlayStats(filePath, playCount, played)
-	case ".flac":
-		return WriteFlacPlayStats(filePath, playCount, played)
-	default:
-		return fmt.Errorf("unsupported file format: %s", ext)
 	}
 }
 
@@ -426,39 +353,4 @@ func encodeVorbisCommentBody(vc *meta.VorbisComment) ([]byte, error) {
 	}
 
 	return buf.Bytes(), nil
-}
-
-func parseFmpsRating(s string) (float64, error) {
-	var f float64
-	_, err := fmt.Sscanf(s, "%f", &f)
-	return f, err
-}
-
-func fmpsToStars(f float64) int {
-	switch {
-	case f >= 0.9:
-		return 5
-	case f >= 0.7:
-		return 4
-	case f >= 0.4:
-		return 3
-	case f >= 0.2:
-		return 2
-	case f > 0:
-		return 1
-	default:
-		return 0
-	}
-}
-
-func parseVorbisRating(s string) (int, error) {
-	var r int
-	_, err := fmt.Sscanf(s, "%d", &r)
-	if err != nil {
-		return 0, err
-	}
-	if r < 0 || r > 5 {
-		return 0, fmt.Errorf("rating %d out of range 0-5", r)
-	}
-	return r, nil
 }

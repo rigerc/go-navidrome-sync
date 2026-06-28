@@ -151,7 +151,11 @@ const (
 
 var (
 	readLocalFile = tag.ReadLocalFile
-	audioFileExts = map[string]struct{}{".mp3": {}, ".flac": {}}
+	audioFileExts = map[string]struct{}{
+		".mp3": {}, ".flac": {},
+		".ogg": {}, ".oga": {}, ".opus": {},
+		".m4a": {}, ".aac": {}, ".mp4": {},
+	}
 )
 
 func DefaultOptions() Options {

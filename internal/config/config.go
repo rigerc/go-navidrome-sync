@@ -10,6 +10,7 @@ import (
 	"github.com/knadh/koanf/providers/env"
 	"github.com/knadh/koanf/providers/file"
 	"github.com/knadh/koanf/v2"
+	"github.com/rigerc/go-navidrome-sync/internal/tag"
 )
 
 type Config struct {
@@ -33,6 +34,7 @@ type Config struct {
 		Stars struct {
 			Prefer string `koanf:"prefer"`
 		} `koanf:"stars"`
+		RatingTagOrder []string `koanf:"ratingtagorder"`
 	} `koanf:"sync"`
 	Playlists struct {
 		Path             string `koanf:"path"`
@@ -106,6 +108,9 @@ func ApplyDefaults(cfg *Config) {
 		cfg.Sync.Metadata.Ratings = true
 		cfg.Sync.Metadata.PlayStats = true
 	}
+	if len(cfg.Sync.RatingTagOrder) == 0 {
+		cfg.Sync.RatingTagOrder = append([]string(nil), tag.DefaultRatingTagOrder...)
+	}
 	if cfg.Playlists.Path == "" {
 		cfg.Playlists.Path = "./playlists"
 	}
@@ -150,6 +155,12 @@ func Validate(cfg *Config) error {
 	}
 	if _, err := ParseSearchInterval(cfg.Sync.SearchInterval); err != nil {
 		return fmt.Errorf("sync.searchinterval is invalid: %w", err)
+	}
+	for _, source := range cfg.Sync.RatingTagOrder {
+		if _, ok := tag.KnownRatingSources[source]; !ok {
+			return fmt.Errorf("sync.ratingtagorder has unknown source %q (valid: %s, %s, %s, %s)",
+				source, tag.SourceMediaMonkey, tag.SourceFoobar2000, tag.SourceWMP, tag.SourceITunes)
+		}
 	}
 	return nil
 }

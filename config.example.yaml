@@ -40,6 +40,10 @@ sync:
     # Conflict resolution for starred state, when both sides differ.
     # Same values as sync.prefer. Falls back to sync.prefer when empty.
     prefer: ""
+  # Priority order of rating sources to read from a file. First match wins.
+  # Valid values: WMP, iTunes, MediaMonkey, foobar2000.
+  # Default: ["WMP", "iTunes", "MediaMonkey", "foobar2000"].
+  ratingtagorder: ["WMP", "iTunes", "MediaMonkey", "foobar2000"]
 
 playlists:
   # Directory to scan for local .m3u / .m3u8 files. Scanned recursively.

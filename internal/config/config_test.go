@@ -88,6 +88,41 @@ func TestLoad_OptionalDefaultConfigCanBeMissing(t *testing.T) {
 	}
 }
 
+func baseValidConfig() *Config {
+	pw := "secret" // test fixture, not a real credential
+	cfg := &Config{}
+	cfg.Navidrome.BaseURL = "https://nd.example"
+	cfg.Navidrome.User = "alice"
+	cfg.Navidrome.Password = pw
+	return cfg
+}
+
+func TestValidate_DefaultsRatingTagOrder(t *testing.T) {
+	cfg := baseValidConfig()
+	if err := Validate(cfg); err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+	if len(cfg.Sync.RatingTagOrder) == 0 {
+		t.Fatal("RatingTagOrder was not defaulted")
+	}
+}
+
+func TestValidate_RejectsUnknownRatingSource(t *testing.T) {
+	cfg := baseValidConfig()
+	cfg.Sync.RatingTagOrder = []string{"foobar2000", "Winamp"}
+	if err := Validate(cfg); err == nil {
+		t.Fatal("Validate() error = nil, want unknown rating source error")
+	}
+}
+
+func TestValidate_AcceptsKnownRatingSources(t *testing.T) {
+	cfg := baseValidConfig()
+	cfg.Sync.RatingTagOrder = []string{"WMP", "iTunes", "MediaMonkey", "foobar2000"}
+	if err := Validate(cfg); err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+}
+
 func TestParseSearchInterval(t *testing.T) {
 	got, err := ParseSearchInterval("250ms")
 	if err != nil {
